@@ -1,21 +1,24 @@
 import * as store from './db.js';
-import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, setCats, petById, catById } from './data.js';
-import { fmt, dateStr, monthTxs, petTotals, spendTotal, isSpend, recommendPlan, catCount, daysSinceFed, streak, feedLine, idleLine, initNextDue, postDue } from './engine.js';
+import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, INCOME_CATS, incomeCatById, ACCOUNT_TYPES, setCats, petById, catById } from './data.js';
+import { fmt, dateStr, monthTxs, petTotals, spendTotal, incomeTotal, isSpend, isIncome, isTransfer, txKind, accountBalances, netWorth, recommendPlan, catCount, daysSinceFed, streak, feedLine, idleLine, initNextDue, postDue } from './engine.js';
 import { doSync } from './sync.js';
 
 let txs = [];
 let recurring = [];
 let cats = [];
 let payments = [];
+let balances = {};
 let selectedPay = 'cash';
 let pending = [];
 let syncCfg = { url: '', token: '', last: 0 };
 let theme = 'auto';
 let editingCat = null;
 let tab = 'entry';
+let entryKind = 'expense'; // expense | income | transfer
 let amount = '';
 let noteVal = '';
 let entryStep = 1;
+let transferFrom = null;
 let ledgerDate = new Date();
 let ledgerMode = 'list';
 
@@ -45,6 +48,7 @@ async function reload() {
   setCats(cats);
   txs.sort((a, b) => b.ts - a.ts);
   payments = (await store.getAll('payments')).sort((a, b) => (a.order || 0) - (b.order || 0));
+  balances = accountBalances(payments, txs);
   const lastPay = await store.getKV('lastPay');
   if (lastPay && payments.some((p) => p.id === lastPay)) selectedPay = lastPay;
   pending = (await store.getKV('pending')) || [];
@@ -86,6 +90,18 @@ function stepDots(n) {
   return `<div class="step-dots">${[1, 2, 3].map((i) => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</div>`;
 }
 
+const KIND_META = {
+  expense: { color: 'var(--accent)', step2: '用什麼付？', next: '下一步：選支付方式　›' },
+  income: { color: '#3B9A6E', step2: '存進哪個帳戶？', next: '下一步：選帳戶　›' },
+  transfer: { color: '#4A86C5', step2: '從哪個帳戶轉出？', next: '下一步：轉出帳戶　›' }
+};
+
+function acctCard(p, selId, extra) {
+  const bal = p.tracked ? `<span class="pb">${fmt(balances[p.id] || 0)}</span>` : '<span class="pb tag">標籤</span>';
+  return `<button class="pay-card ${p.id === selId ? 'on' : ''}" ${extra}="${p.id}">
+    <span class="pe">${p.emo}</span><span class="pn">${p.name}</span>${bal}</button>`;
+}
+
 function renderEntry() {
   if (entryStep === 1) renderStep1();
   else if (entryStep === 2) renderStep2();
@@ -93,7 +109,7 @@ function renderEntry() {
 }
 
 function renderStep1() {
-  const pendHtml = pending.length ? `
+  const pendHtml = (entryKind === 'expense' && pending.length) ? `
     <div class="card">
       <div class="sub">📬 偵測到 ${pending.length} 筆扣款通知，確認後入帳：</div>
       ${pending.map((p) => {
@@ -113,6 +129,11 @@ function renderStep1() {
 
   view.innerHTML = `
     ${pendHtml}
+    <div class="kind-toggle">
+      <button class="${entryKind === 'expense' ? 'on' : ''}" data-kind="expense">支出</button>
+      <button class="${entryKind === 'income' ? 'on inc' : ''}" data-kind="income">收入</button>
+      <button class="${entryKind === 'transfer' ? 'on tr' : ''}" data-kind="transfer">轉帳</button>
+    </div>
     ${stepDots(1)}
     <div class="amount-box"><span class="cur">NT$</span><span class="num zero" id="amt">0</span></div>
     <input class="note-input" id="note" placeholder="備註（選填）" autocomplete="off" value="${noteVal.replace(/"/g, '&quot;')}">
@@ -122,32 +143,35 @@ function renderStep1() {
       <button data-key="0">0</button>
       <button data-key="B" class="fn">⌫</button>
     </div>
-    <button class="btn next-btn" data-act="next-step">下一步：選支付方式　›</button>`;
+    <button class="btn next-btn" data-act="next-step" style="background:${entryKind === 'expense' ? '' : KIND_META[entryKind].color}">${KIND_META[entryKind].next}</button>`;
+  if (entryKind !== 'expense') {
+    view.querySelector('.next-btn').style.boxShadow = 'none';
+  }
   updateAmt();
 }
 
 function renderStep2() {
-  const cards = payments.map((p) => {
-    const bal = p.type === 'easycard' ? `<span class="pb">${fmt(p.balance || 0)}</span>` : '';
-    return `<button class="pay-card ${p.id === selectedPay ? 'on' : ''}" data-pay="${p.id}">
-      <span class="pe">${p.emo}</span><span class="pn">${p.name}</span>${bal}</button>`;
-  }).join('');
-  const easy = payments.find((p) => p.type === 'easycard');
+  const list = entryKind === 'expense' ? payments : payments.filter((p) => p.tracked);
+  const selId = entryKind === 'transfer' ? transferFrom : selectedPay;
+  const attr = entryKind === 'transfer' ? 'data-from' : (entryKind === 'income' ? 'data-acct' : 'data-pay');
+  const cards = list.map((p) => acctCard(p, selId, attr)).join('');
 
   view.innerHTML = `
     ${stepDots(2)}
     <div class="step-head">
       <button class="step-back" data-act="back-step" data-to="1">‹</button>
       <div>
-        <div class="step-amt">NT$ ${Number(amount).toLocaleString('zh-TW')}</div>
-        <div class="step-sub">用什麼付？</div>
+        <div class="step-amt">${entryKind === 'income' ? '+ ' : ''}NT$ ${Number(amount).toLocaleString('zh-TW')}</div>
+        <div class="step-sub">${KIND_META[entryKind].step2}</div>
       </div>
     </div>
-    <div class="pay-grid">${cards}</div>
-    ${easy ? `<button class="btn ghost" data-act="topup" style="margin-top:14px">➕ 悠遊卡加值（餘額 ${fmt(easy.balance || 0)}）</button>` : ''}`;
+    <div class="pay-grid">${cards}</div>`;
 }
 
 function renderStep3() {
+  if (entryKind === 'income') return renderIncomeCats();
+  if (entryKind === 'transfer') return renderTransferTo();
+  // 支出：選分類
   const pay = payments.find((p) => p.id === selectedPay);
   const favIds = favCatIds();
   const favHtml = favIds.length
@@ -187,6 +211,39 @@ function renderStep3() {
   });
 }
 
+function renderIncomeCats() {
+  const acct = payments.find((p) => p.id === selectedPay);
+  const tiles = INCOME_CATS.map((c) =>
+    `<button class="cat-tile" data-inccat="${c.id}" style="border-color:#3B9A6E55;background:#3B9A6E12">
+      <span class="ce">${c.emo}</span><span class="cn">${c.name}</span></button>`).join('');
+  view.innerHTML = `
+    ${stepDots(3)}
+    <div class="step-head">
+      <button class="step-back" data-act="back-step" data-to="2">‹</button>
+      <div>
+        <div class="step-amt" style="color:#3B9A6E">+ NT$ ${Number(amount).toLocaleString('zh-TW')} <span class="step-pay">→ ${acct ? acct.emo + ' ' + acct.name : ''}</span></div>
+        <div class="step-sub">這筆錢從哪來？</div>
+      </div>
+    </div>
+    <div class="cat-groups"><div class="cat-group"><div class="cat-grid">${tiles}</div></div></div>`;
+}
+
+function renderTransferTo() {
+  const from = payments.find((p) => p.id === transferFrom);
+  const list = payments.filter((p) => p.tracked && p.id !== transferFrom);
+  const cards = list.map((p) => acctCard(p, null, 'data-toacct')).join('');
+  view.innerHTML = `
+    ${stepDots(3)}
+    <div class="step-head">
+      <button class="step-back" data-act="back-step" data-to="2">‹</button>
+      <div>
+        <div class="step-amt" style="color:#4A86C5">NT$ ${Number(amount).toLocaleString('zh-TW')} <span class="step-pay">${from ? from.emo + ' ' + from.name + ' →' : ''}</span></div>
+        <div class="step-sub">轉到哪個帳戶？</div>
+      </div>
+    </div>
+    <div class="pay-grid">${cards}</div>`;
+}
+
 function updateAmt() {
   const el = document.getElementById('amt');
   if (!el) return;
@@ -201,6 +258,14 @@ function pressKey(k) {
   updateAmt();
 }
 
+function resetEntry() {
+  amount = '';
+  noteVal = '';
+  entryStep = 1;
+  transferFrom = null;
+  renderEntry();
+}
+
 async function saveTx(catId) {
   const amt = Number(amount);
   const cat = catById(catId);
@@ -209,42 +274,61 @@ async function saveTx(catId) {
     showToast(`${pet.name}：先輸入金額，再決定餵我多少啦！`, pet.color);
     return;
   }
-  const note = noteVal.trim();
-  await store.put('tx', { id: store.uid(), amount: amt, catId, note, ts: Date.now(), source: 'manual', payId: selectedPay });
+  await store.put('tx', { id: store.uid(), kind: 'expense', amount: amt, catId, note: noteVal.trim(), ts: Date.now(), source: 'manual', payId: selectedPay });
+  await reload();
   let balWarn = '';
   const pay = payments.find((p) => p.id === selectedPay);
-  if (pay && pay.type === 'easycard') {
-    pay.balance = (pay.balance || 0) - amt;
-    await store.put('payments', pay);
-    if (pay.balance < 100) balWarn = `（悠遊卡只剩 ${fmt(pay.balance)}，該加值囉！）`;
+  if (pay && pay.type === 'easycard' && (balances[pay.id] || 0) < 100) {
+    balWarn = `（悠遊卡只剩 ${fmt(balances[pay.id] || 0)}，該加值囉！）`;
   }
-  await reload();
   const now = new Date();
   const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
   const line = feedLine(pet.id, { n: catCount(mt, catId), cat: cat.name, amt: fmt(amt) });
-  amount = '';
-  noteVal = '';
-  entryStep = 1;
-  renderEntry();
+  resetEntry();
   showToast(`${pet.name}：${line}${balWarn}`, pet.color);
 }
 
-async function topupEasycard() {
-  const pay = payments.find((p) => p.id === selectedPay && p.type === 'easycard') || payments.find((p) => p.type === 'easycard');
-  if (!pay) return;
-  const val = prompt(`悠遊卡加值金額（目前餘額 ${fmt(pay.balance || 0)}）`, '500');
-  if (val === null) return;
-  const amt = Number(val);
-  if (!amt || amt <= 0) {
-    showToast('金額不對喔');
-    return;
-  }
-  pay.balance = (pay.balance || 0) + amt;
-  await store.put('payments', pay);
-  await store.put('tx', { id: store.uid(), amount: amt, catId: '', note: '悠遊卡加值', ts: Date.now(), source: 'topup', payId: pay.id });
+async function saveIncome(incCatId) {
+  const amt = Number(amount);
+  if (!amt) return;
+  const c = incomeCatById(incCatId);
+  const acct = payments.find((p) => p.id === selectedPay);
+  await store.put('tx', { id: store.uid(), kind: 'income', amount: amt, catId: incCatId, note: noteVal.trim(), ts: Date.now(), source: 'manual', payId: selectedPay });
   await reload();
+  resetEntry();
+  showToast(`💰 金金：收入 ${c.emo}${c.name} ${fmt(amt)} 入庫 ${acct ? acct.name : ''}，甚好甚好！`, '#EF9F27');
+}
+
+async function saveTransfer(toId) {
+  const amt = Number(amount);
+  if (!amt) return;
+  const from = payments.find((p) => p.id === transferFrom);
+  const to = payments.find((p) => p.id === toId);
+  await store.put('tx', { id: store.uid(), kind: 'transfer', amount: amt, note: noteVal.trim(), ts: Date.now(), source: 'manual', fromPay: transferFrom, toPay: toId });
+  await reload();
+  resetEntry();
+  showToast(`🔄 已轉帳 ${fmt(amt)}：${from ? from.name : ''} → ${to ? to.name : ''}`, '#4A86C5');
+}
+
+async function topupEasycard() {
+  const easy = payments.find((p) => p.type === 'easycard');
+  if (!easy) return;
+  // 悠遊卡加值 = 從現金/銀行轉入悠遊卡
+  amount = '';
+  noteVal = '悠遊卡加值';
+  entryKind = 'transfer';
+  entryStep = 3;
+  transferFrom = payments.find((p) => p.tracked && p.type !== 'easycard')?.id || 'cash';
+  selectedPay = easy.id;
+  const val = prompt('悠遊卡加值金額', '500');
+  if (val === null) { resetEntry(); entryKind = 'expense'; return; }
+  const amt = Number(val);
+  if (!amt || amt <= 0) { resetEntry(); entryKind = 'expense'; showToast('金額不對喔'); return; }
+  amount = String(amt);
+  await saveTransfer(easy.id);
+  entryKind = 'expense';
   renderEntry();
-  showToast(`🔋 已加值 ${fmt(amt)}，餘額 ${fmt(pay.balance)}（提示：改用永豐 DAWHO 自動加值可多賺 +3%）`);
+  showToast(`🔋 已加值 ${fmt(amt)}（提示：改用永豐 DAWHO 自動加值可多賺 +3%）`);
 }
 
 async function resolvePending(id, confirmed) {
@@ -256,7 +340,7 @@ async function resolvePending(id, confirmed) {
   await store.setKV('pendingResolved', resolved);
   if (confirmed) {
     const ts = p.date ? new Date(p.date).getTime() : Date.now();
-    await store.put('tx', { id: 'p_' + id, amount: Number(p.amount), catId, note: p.merchant, ts, source: 'email' });
+    await store.put('tx', { id: 'p_' + id, kind: 'expense', amount: Number(p.amount), catId, note: p.merchant, ts, source: 'email', payId: 'sinopac' });
   }
   pending = pending.filter((x) => x.id !== id);
   await store.setKV('pending', pending);
@@ -368,15 +452,21 @@ function renderLedger() {
   const y = ledgerDate.getFullYear();
   const m = ledgerDate.getMonth();
   const mt = monthTxs(txs, y, m);
-  const monthTotal = spendTotal(mt);
+  const spend = spendTotal(mt);
+  const income = incomeTotal(mt);
 
   const body = ledgerMode === 'list' ? ledgerList(mt) : ledgerStats(mt, y, m);
 
   view.innerHTML = `
     <div class="month-nav">
       <button data-act="prev-month">‹</button>
-      <span class="m">${y} 年 ${m + 1} 月 · ${fmt(monthTotal)}</span>
+      <span class="m">${y} 年 ${m + 1} 月</span>
       <button data-act="next-month">›</button>
+    </div>
+    <div class="io-summary">
+      <div class="io"><span class="k">收入</span><span class="v inc">+${fmt(income)}</span></div>
+      <div class="io"><span class="k">支出</span><span class="v exp">−${fmt(spend)}</span></div>
+      <div class="io"><span class="k">結餘</span><span class="v ${income - spend >= 0 ? 'inc' : 'exp'}">${income - spend >= 0 ? '+' : '−'}${fmt(Math.abs(income - spend))}</span></div>
     </div>
     <div class="seg">
       <button data-act="mode-list" class="${ledgerMode === 'list' ? 'on' : ''}">明細</button>
@@ -400,16 +490,31 @@ function ledgerList(mt) {
   const list = days.map((k) => {
     const d = new Date(k + 'T12:00:00');
     const rows = byDay[k].map((t) => {
-      const pay = payments.find((x) => x.id === t.payId);
-      const payTag = pay ? ` <span class="paytag">${pay.emo}${pay.name}</span>` : '';
-      if (t.source === 'topup') {
-        return `<div class="tx-row topup-row">
-          <span class="emo">🔋</span>
-          <div class="mid"><div class="cat">悠遊卡加值${payTag}</div></div>
-          <span class="amt">+${fmt(t.amount)}</span>
+      const kind = txKind(t);
+      if (kind === 'transfer') {
+        const from = payments.find((x) => x.id === t.fromPay);
+        const to = payments.find((x) => x.id === (t.toPay != null ? t.toPay : t.payId));
+        return `<div class="tx-row transfer-row">
+          <span class="emo">🔄</span>
+          <div class="mid"><div class="cat">轉帳</div>
+            <div class="note">${from ? from.name : '?'} → ${to ? to.name : '?'}${t.note && t.note !== '悠遊卡加值' ? ' · ' + t.note : ''}</div></div>
+          <span class="amt">${fmt(t.amount)}</span>
           <button class="del" data-del="${t.id}">✕</button>
         </div>`;
       }
+      if (kind === 'income') {
+        const c = incomeCatById(t.catId);
+        const acct = payments.find((x) => x.id === t.payId);
+        return `<div class="tx-row income-row">
+          <span class="emo">${c.emo}</span>
+          <div class="mid"><div class="cat">${c.name}${acct ? ` <span class="paytag">${acct.emo}${acct.name}</span>` : ''}</div>
+            ${t.note ? `<div class="note">${t.note}</div>` : ''}</div>
+          <span class="amt inc">+${fmt(t.amount)}</span>
+          <button class="del" data-del="${t.id}">✕</button>
+        </div>`;
+      }
+      const pay = payments.find((x) => x.id === t.payId);
+      const payTag = pay ? ` <span class="paytag">${pay.emo}${pay.name}</span>` : '';
       const c = catById(t.catId);
       const p = petById(c.pet);
       return `<div class="tx-row">
@@ -418,7 +523,7 @@ function ledgerList(mt) {
           <div class="cat">${c.name}${t.source === 'recurring' ? ' 🔁' : ''}${payTag}</div>
           ${t.note ? `<div class="note">${t.note}</div>` : ''}
         </div>
-        <span class="amt" style="color:${p.deep}">${fmt(t.amount)}</span>
+        <span class="amt" style="color:${p.deep}">−${fmt(t.amount)}</span>
         <button class="del" data-del="${t.id}">✕</button>
       </div>`;
     }).join('');
@@ -503,6 +608,90 @@ function ledgerStats(mt, y, m) {
     <div class="card"><div class="trend">${trend}</div></div>`;
 }
 
+/* ================= assets ================= */
+
+function renderAssets() {
+  const now = new Date();
+  const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
+  const nw = netWorth(payments, txs);
+  const monthInc = incomeTotal(mt);
+  const monthExp = spendTotal(mt);
+
+  const tracked = payments.filter((p) => p.tracked);
+  const cards = payments.filter((p) => !p.tracked);
+
+  const assetRows = tracked.map((p) => {
+    const b = balances[p.id] || 0;
+    return `<div class="acct-row">
+      <span class="ae">${p.emo}</span>
+      <div class="mid"><div class="an">${p.name}</div></div>
+      <span class="ab ${b < 0 ? 'neg' : ''}">${fmt(b)}</span>
+      <button class="del" data-setbal="${p.id}">✎</button>
+      <button class="del" data-delpay="${p.id}">✕</button>
+    </div>`;
+  }).join('') || '<div class="sub">還沒有資產帳戶</div>';
+
+  const cardRows = cards.map((p) =>
+    `<div class="acct-row">
+      <span class="ae">${p.emo}</span>
+      <div class="mid"><div class="an">${p.name}</div><div class="info">信用卡（僅標籤，不計餘額）</div></div>
+      <button class="del" data-delpay="${p.id}">✕</button>
+    </div>`).join('') || '<div class="sub">還沒有信用卡</div>';
+
+  const typeOpts = ACCOUNT_TYPES.map((t) => `<option value="${t.type}">${t.emo} ${t.label}</option>`).join('');
+
+  view.innerHTML = `
+    <div class="nw-card">
+      <div class="nw-label">淨資產</div>
+      <div class="nw-value">${fmt(nw)}</div>
+      <div class="nw-io">
+        <span class="inc">本月收入 +${fmt(monthInc)}</span>
+        <span class="exp">本月支出 −${fmt(monthExp)}</span>
+      </div>
+    </div>
+
+    <h2>資產帳戶</h2>
+    <div class="card">${assetRows}</div>
+
+    <h2>信用卡</h2>
+    <div class="card">${cardRows}</div>
+
+    <h2>新增帳戶</h2>
+    <div class="card">
+      <div class="form-grid">
+        <input id="acct-emo" placeholder="圖示 emoji" maxlength="4" autocomplete="off">
+        <input id="acct-name" placeholder="名稱（例如 中信帳戶）" autocomplete="off">
+        <select id="acct-type" class="full">${typeOpts}</select>
+        <input id="acct-init" class="full" type="number" inputmode="numeric" placeholder="起始餘額（資產類才需要，選填）">
+      </div>
+      <button class="btn" data-act="add-acct">新增帳戶</button>
+    </div>
+
+    <div class="card">
+      <div class="sub">💡 目前餘額會隨支出、收入、轉帳自動增減。第一次使用請按各帳戶的 ✎ 設定實際餘額當起點。</div>
+    </div>`;
+}
+
+async function addAccount() {
+  const name = document.getElementById('acct-name').value.trim();
+  const type = document.getElementById('acct-type').value;
+  const meta = ACCOUNT_TYPES.find((t) => t.type === type);
+  const emo = document.getElementById('acct-emo').value.trim() || meta.emo;
+  const init = Number(document.getElementById('acct-init').value) || 0;
+  if (!name) {
+    showToast('先取個帳戶名稱');
+    return;
+  }
+  const order = Math.max(0, ...payments.map((p) => p.order || 0)) + 1;
+  await store.put('payments', {
+    id: 'acct_' + store.uid().slice(0, 8), name, emo, type,
+    tracked: meta.tracked, initBalance: meta.tracked ? init : undefined, order
+  });
+  await reload();
+  renderAssets();
+  showToast(`已新增帳戶：${emo} ${name}`);
+}
+
 /* ================= settings ================= */
 
 function renderSettings() {
@@ -581,26 +770,6 @@ function renderSettings() {
         <select id="rec-cat" class="full">${catOpts}</select>
       </div>
       <button class="btn" data-act="add-rec">新增</button>
-    </div>
-
-    <h2>支付方式</h2>
-    <div class="card">
-      ${payments.map((p) => `<div class="rec-row">
-        <span class="emo">${p.emo}</span>
-        <div class="mid">
-          <div class="name">${p.name}</div>
-          ${p.type === 'easycard' ? `<div class="info">餘額 ${fmt(p.balance || 0)}</div>` : ''}
-        </div>
-        ${p.type === 'easycard' ? `<button class="del" data-editbal="${p.id}">✎</button>` : ''}
-        ${p.type === 'card' ? `<button class="del" data-delpay="${p.id}">✕</button>` : ''}
-      </div>`).join('')}
-    </div>
-    <div class="card">
-      <div class="sub">新增信用卡／支付方式</div>
-      <div class="form-grid">
-        <input id="pay-name" class="full" placeholder="名稱（例如 國泰CUBE卡）" autocomplete="off">
-      </div>
-      <button class="btn" data-act="add-pay">新增</button>
     </div>
 
     <h2>分類管理</h2>
@@ -722,14 +891,17 @@ function render() {
   if (tab === 'entry') renderEntry();
   else if (tab === 'home') renderHome();
   else if (tab === 'ledger') renderLedger();
+  else if (tab === 'assets') renderAssets();
   else renderSettings();
 }
 
 tabbar.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-tab]');
   if (!btn) return;
+  const prev = tab;
   tab = btn.dataset.tab;
   if (tab === 'ledger') ledgerDate = new Date();
+  if (tab === 'entry' && prev !== 'entry') { entryStep = 1; entryKind = 'expense'; transferFrom = null; }
   render();
 });
 
@@ -740,8 +912,21 @@ view.addEventListener('click', async (e) => {
   const chip = e.target.closest('[data-cat]');
   if (chip) return saveTx(chip.dataset.cat);
 
+  const incChip = e.target.closest('[data-inccat]');
+  if (incChip) return saveIncome(incChip.dataset.inccat);
+
   const pet = e.target.closest('[data-pet]');
   if (pet) return petSpeak(pet.dataset.pet);
+
+  const kindBtn = e.target.closest('[data-kind]');
+  if (kindBtn) {
+    entryKind = kindBtn.dataset.kind;
+    entryStep = 1;
+    transferFrom = null;
+    noteVal = document.getElementById('note')?.value || noteVal;
+    renderEntry();
+    return;
+  }
 
   const payBtn = e.target.closest('[data-pay]');
   if (payBtn) {
@@ -752,25 +937,45 @@ view.addEventListener('click', async (e) => {
     return;
   }
 
-  const editbal = e.target.closest('[data-editbal]');
-  if (editbal) {
-    const p = payments.find((x) => x.id === editbal.dataset.editbal);
-    const val = prompt('校正悠遊卡餘額（輸入實際餘額）', String(p.balance || 0));
+  const acctBtn = e.target.closest('[data-acct]');
+  if (acctBtn) {
+    selectedPay = acctBtn.dataset.acct;
+    entryStep = 3;
+    return renderEntry();
+  }
+
+  const fromBtn = e.target.closest('[data-from]');
+  if (fromBtn) {
+    transferFrom = fromBtn.dataset.from;
+    entryStep = 3;
+    return renderEntry();
+  }
+
+  const toBtn = e.target.closest('[data-toacct]');
+  if (toBtn) return saveTransfer(toBtn.dataset.toacct);
+
+  const setbal = e.target.closest('[data-setbal]');
+  if (setbal) {
+    const p = payments.find((x) => x.id === setbal.dataset.setbal);
+    const cur = balances[p.id] || 0;
+    const val = prompt(`設定「${p.name}」目前實際餘額`, String(Math.round(cur)));
     if (val === null) return;
-    p.balance = Number(val) || 0;
+    const target = Number(val) || 0;
+    const txDelta = cur - (p.initBalance || 0);   // 交易造成的變動
+    p.initBalance = target - txDelta;              // 反推起始餘額，使計算餘額 = 目標
     await store.put('payments', p);
     await reload();
-    renderSettings();
+    renderAssets();
     return;
   }
 
   const delpay = e.target.closest('[data-delpay]');
   if (delpay) {
     const p = payments.find((x) => x.id === delpay.dataset.delpay);
-    if (confirm(`刪除支付方式「${p.name}」？（帳目紀錄會保留）`)) {
+    if (confirm(`刪除帳戶「${p.name}」？（帳目紀錄會保留）`)) {
       await store.del('payments', p.id);
       await reload();
-      renderSettings();
+      renderAssets();
     }
     return;
   }
@@ -846,19 +1051,7 @@ view.addEventListener('click', async (e) => {
     return renderSettings();
   }
   if (a === 'topup') return topupEasycard();
-  if (a === 'add-pay') {
-    const name = document.getElementById('pay-name').value.trim();
-    if (!name) {
-      showToast('先取個名字，例如 國泰CUBE卡');
-      return;
-    }
-    const order = Math.max(0, ...payments.map((p) => p.order || 0)) + 1;
-    await store.put('payments', { id: 'pay_' + store.uid().slice(0, 8), name, emo: '💳', type: 'card', order });
-    await reload();
-    renderSettings();
-    showToast(`已新增支付方式：💳 ${name}`);
-    return;
-  }
+  if (a === 'add-acct') return addAccount();
   if (a === 'save-sync') {
     await store.setKV('syncUrl', document.getElementById('sync-url').value.trim());
     await store.setKV('syncToken', document.getElementById('sync-token').value.trim());
@@ -943,6 +1136,36 @@ async function boot() {
     const snack = allCats.find((c) => c.id === 'snack');
     if (snack && snack.name === '零食宵夜') await store.put('cats', { ...snack, name: '零食點心' });
     await store.setKV('mealsV3', 1);
+  }
+
+  // 一次性遷移：帳戶模型（tracked / initBalance），把舊 easycard 的累加餘額轉成起始餘額
+  if (!(await store.getKV('acctV4'))) {
+    const accs = await store.getAll('payments');
+    const allTxs = await store.getAll('tx');
+    for (const p of accs) {
+      const tracked = p.type === 'cash' || p.type === 'bank' || p.type === 'easycard' || p.type === 'invest';
+      const patch = { ...p, tracked };
+      if (tracked && patch.initBalance === undefined) {
+        if (p.type === 'easycard' && typeof p.balance === 'number') {
+          // 舊 easycard.balance 已含加值與扣款；反推起始值使計算餘額維持不變
+          let delta = 0;
+          for (const t of allTxs) {
+            if (t.source === 'topup' && t.payId === p.id) delta += t.amount;
+            else if ((t.kind === 'expense' || (!t.kind && t.source !== 'topup')) && t.payId === p.id) delta -= t.amount;
+          }
+          patch.initBalance = p.balance - delta;
+        } else {
+          patch.initBalance = 0;
+        }
+      }
+      delete patch.balance;
+      await store.put('payments', patch);
+    }
+    // 補一個銀行帳戶（若沒有）
+    if (!accs.some((p) => p.id === 'bank' || p.type === 'bank')) {
+      await store.put('payments', { id: 'bank', name: '銀行帳戶', emo: '🏦', type: 'bank', tracked: true, initBalance: 0, order: 1.5 });
+    }
+    await store.setKV('acctV4', 1);
   }
 
   await reload();

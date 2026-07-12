@@ -1,7 +1,37 @@
 import { CATS, catById, DIALOG, CAT_PLAN, RICHART_PLANS } from './data.js';
 import { uid } from './db.js';
 
-export const isSpend = (t) => t.source !== 'topup';
+/* 交易種類：expense 支出 / income 收入 / transfer 轉帳。舊資料無 kind 一律視為支出。 */
+export const txKind = (t) => t.kind || (t.source === 'topup' ? 'transfer' : 'expense');
+export const isSpend = (t) => txKind(t) === 'expense';
+export const isIncome = (t) => txKind(t) === 'income';
+export const isTransfer = (t) => txKind(t) === 'transfer';
+
+/* 由起始餘額 + 全部交易即時計算每個帳戶目前餘額（比累加式更穩，刪帳自動反映） */
+export function accountBalances(accounts, txs) {
+  const bal = {};
+  for (const a of accounts) bal[a.id] = a.tracked ? (a.initBalance || 0) : 0;
+  for (const t of txs) {
+    const k = txKind(t);
+    if (k === 'expense' && t.payId != null && bal[t.payId] !== undefined) bal[t.payId] -= t.amount;
+    else if (k === 'income' && t.payId != null && bal[t.payId] !== undefined) bal[t.payId] += t.amount;
+    else if (k === 'transfer') {
+      if (t.fromPay != null && bal[t.fromPay] !== undefined) bal[t.fromPay] -= t.amount;
+      const to = t.toPay != null ? t.toPay : t.payId; // 舊 topup 用 payId 當入帳帳戶
+      if (to != null && bal[to] !== undefined) bal[to] += t.amount;
+    }
+  }
+  return bal;
+}
+
+export function netWorth(accounts, txs) {
+  const bal = accountBalances(accounts, txs);
+  return accounts.filter((a) => a.tracked).reduce((s, a) => s + (bal[a.id] || 0), 0);
+}
+
+export function incomeTotal(list) {
+  return list.filter(isIncome).reduce((a, t) => a + t.amount, 0);
+}
 
 export function fmt(n) {
   return 'NT$' + Math.round(n).toLocaleString('zh-TW');
@@ -150,11 +180,13 @@ export function postDue(recurring) {
     while (r.nextDue && r.nextDue <= today && guard < 24) {
       newTxs.push({
         id: uid(),
+        kind: 'expense',
         amount: r.amount,
         catId: r.catId,
         note: r.name,
         ts: new Date(r.nextDue + 'T12:00:00').getTime(),
-        source: 'recurring'
+        source: 'recurring',
+        payId: r.payId || 'sinopac'
       });
       r.nextDue = advanceDue(r.nextDue, r.day);
       changed = true;

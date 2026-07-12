@@ -54,9 +54,12 @@ function sheet(name, headers) {
 }
 
 function txSheet() {
-  const sh = sheet('tx', ['id', 'ts', 'amount', 'catId', 'note', 'source', 'deleted', 'payId']);
-  // 舊版試算表只有 7 欄，自動補上 payId 欄位
-  if (sh.getRange(1, 8).getValue() !== 'payId') sh.getRange(1, 8).setValue('payId');
+  const sh = sheet('tx', ['id', 'ts', 'amount', 'catId', 'note', 'source', 'deleted', 'payId', 'kind', 'fromPay', 'toPay']);
+  // 舊版試算表欄位較少，自動補上新欄位標題
+  var heads = ['id', 'ts', 'amount', 'catId', 'note', 'source', 'deleted', 'payId', 'kind', 'fromPay', 'toPay'];
+  for (var c = 0; c < heads.length; c++) {
+    if (sh.getRange(1, c + 1).getValue() !== heads[c]) sh.getRange(1, c + 1).setValue(heads[c]);
+  }
   return sh;
 }
 
@@ -90,11 +93,11 @@ function sync(body) {
   const appends = [];
   (body.txs || []).forEach(function (t) {
     if (!rowById[String(t.id)]) {
-      appends.push([String(t.id), Number(t.ts), Number(t.amount), String(t.catId || ''), String(t.note || ''), String(t.source || 'manual'), '', String(t.payId || '')]);
+      appends.push([String(t.id), Number(t.ts), Number(t.amount), String(t.catId || ''), String(t.note || ''), String(t.source || 'manual'), '', String(t.payId || ''), String(t.kind || 'expense'), String(t.fromPay || ''), String(t.toPay || '')]);
     }
   });
   if (appends.length) {
-    sh.getRange(sh.getLastRow() + 1, 1, appends.length, 8).setValues(appends);
+    sh.getRange(sh.getLastRow() + 1, 1, appends.length, 11).setValues(appends);
     const fresh = sh.getDataRange().getValues();
     for (let i = 1; i < fresh.length; i++) rowById[String(fresh[i][0])] = i + 1;
   }
@@ -120,7 +123,7 @@ function sync(body) {
   for (let i = 1; i < all.length; i++) {
     const r = all[i];
     if (r[6]) deletedIds.push(String(r[0]));
-    else txs.push({ id: String(r[0]), ts: Number(r[1]), amount: Number(r[2]), catId: String(r[3] || ''), note: String(r[4] || ''), source: String(r[5] || 'manual'), payId: String(r[7] || '') });
+    else txs.push({ id: String(r[0]), ts: Number(r[1]), amount: Number(r[2]), catId: String(r[3] || ''), note: String(r[4] || ''), source: String(r[5] || 'manual'), payId: String(r[7] || ''), kind: String(r[8] || 'expense'), fromPay: String(r[9] || ''), toPay: String(r[10] || '') });
   }
   const pall = ps.getDataRange().getValues();
   const pending = [];

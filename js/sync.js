@@ -25,8 +25,14 @@ export async function doSync() {
   const localById = new Map(txs.map((t) => [t.id, t]));
   for (const t of data.txs) {
     const local = localById.get(t.id);
-    if (local && local.payId && !t.payId) t.payId = local.payId; // 雲端還沒存 payId 時保留本機標記
-    if (local && local.source === 'topup') t.source = 'topup';
+    if (local) {
+      // 雲端 Code.gs 若為舊版、沒存這些欄位，回傳時保留本機值，避免收入/轉帳/標記遺失
+      if (local.payId && !t.payId) t.payId = local.payId;
+      if (local.kind && !t.kind) t.kind = local.kind;
+      if (local.fromPay && t.fromPay == null) t.fromPay = local.fromPay;
+      if (local.toPay && t.toPay == null) t.toPay = local.toPay;
+      if (local.source === 'topup') t.source = 'topup';
+    }
     await store.put('tx', t);
   }
   for (const id of data.deletedIds || []) await store.del('tx', id);

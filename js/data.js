@@ -135,12 +135,38 @@ export const DIALOG = {
   }
 };
 
+/* 帳戶。tracked=true 代表是真資產、有餘額（現金/銀行/悠遊卡/投資）；
+   信用卡走簡單模式 tracked=false，只當支付標籤、不追餘額。
+   initBalance = 使用者設定的起始餘額，目前餘額由交易即時計算。 */
 export const DEFAULT_PAYMENTS = [
-  { id: 'cash', name: '現金', emo: '💵', type: 'cash', order: 0 },
-  { id: 'easycard', name: '悠遊卡', emo: '🚌', type: 'easycard', balance: 0, order: 1 },
-  { id: 'richart', name: '台新Richart', emo: '💳', type: 'card', order: 2 },
-  { id: 'sinopac', name: '永豐卡', emo: '💳', type: 'card', order: 3 }
+  { id: 'cash', name: '現金', emo: '💵', type: 'cash', tracked: true, initBalance: 0, order: 0 },
+  { id: 'bank', name: '銀行帳戶', emo: '🏦', type: 'bank', tracked: true, initBalance: 0, order: 1 },
+  { id: 'easycard', name: '悠遊卡', emo: '🚌', type: 'easycard', tracked: true, initBalance: 0, order: 2 },
+  { id: 'richart', name: '台新Richart', emo: '💳', type: 'card', tracked: false, order: 3 },
+  { id: 'sinopac', name: '永豐卡', emo: '💳', type: 'card', tracked: false, order: 4 }
 ];
+
+export const ACCOUNT_TYPES = [
+  { type: 'cash', label: '現金', emo: '💵', tracked: true },
+  { type: 'bank', label: '銀行帳戶', emo: '🏦', tracked: true },
+  { type: 'easycard', label: '悠遊卡／電子票證', emo: '🚌', tracked: true },
+  { type: 'invest', label: '投資帳戶', emo: '📈', tracked: true },
+  { type: 'card', label: '信用卡', emo: '💳', tracked: false }
+];
+
+/* 收入分類（餵金金——收入越多金金越開心） */
+export const INCOME_CATS = [
+  { id: 'salary', name: '薪水', emo: '💼' },
+  { id: 'bonus', name: '獎金', emo: '🎯' },
+  { id: 'redpack', name: '紅包禮金', emo: '🧧' },
+  { id: 'refund', name: '退款', emo: '↩️' },
+  { id: 'invest_gain', name: '投資收益', emo: '📈' },
+  { id: 'sidejob', name: '副業外快', emo: '💡' },
+  { id: 'income_other', name: '其他收入', emo: '🪙' }
+];
+
+export const incomeCatById = (id) =>
+  INCOME_CATS.find((c) => c.id === id) || { id, name: '其他收入', emo: '🪙' };
 
 /* 台新 Richart 卡權益（2026/7/1～2027/3/31，每日可在 Richart Life APP 切換一次，預設天天刷） */
 export const RICHART_PLANS = {
