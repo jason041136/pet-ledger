@@ -1,0 +1,15 @@
+{
+  "name": "怪獸小窩｜記帳養成",
+  "short_name": "怪獸小窩",
+  "description": "餵養你的錢錢怪獸——記帳養成 App",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf9f5",
+  "theme_color": "#faf9f5",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
