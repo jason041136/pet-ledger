@@ -138,12 +138,14 @@ export const DIALOG = {
 /* 帳戶。tracked=true 代表是真資產、有餘額（現金/銀行/悠遊卡/投資）；
    信用卡走簡單模式 tracked=false，只當支付標籤、不追餘額。
    initBalance = 使用者設定的起始餘額，目前餘額由交易即時計算。 */
+/* type: cash/bank/easycard/invest = 資產（正餘額）；card = 信用卡（負餘額 = 待繳）。
+   全部 tracked（有餘額）。淨資產 = 資產總額 − 信用卡待繳。 */
 export const DEFAULT_PAYMENTS = [
   { id: 'cash', name: '現金', emo: '💵', type: 'cash', tracked: true, initBalance: 0, order: 0 },
   { id: 'bank', name: '銀行帳戶', emo: '🏦', type: 'bank', tracked: true, initBalance: 0, order: 1 },
   { id: 'easycard', name: '悠遊卡', emo: '🚌', type: 'easycard', tracked: true, initBalance: 0, order: 2 },
-  { id: 'richart', name: '台新Richart', emo: '💳', type: 'card', tracked: false, order: 3 },
-  { id: 'sinopac', name: '永豐卡', emo: '💳', type: 'card', tracked: false, order: 4 }
+  { id: 'richart', name: '台新Richart', emo: '💳', type: 'card', tracked: true, initBalance: 0, order: 3 },
+  { id: 'sinopac', name: '永豐卡', emo: '💳', type: 'card', tracked: true, initBalance: 0, order: 4 }
 ];
 
 export const ACCOUNT_TYPES = [
@@ -151,8 +153,11 @@ export const ACCOUNT_TYPES = [
   { type: 'bank', label: '銀行帳戶', emo: '🏦', tracked: true },
   { type: 'easycard', label: '悠遊卡／電子票證', emo: '🚌', tracked: true },
   { type: 'invest', label: '投資帳戶', emo: '📈', tracked: true },
-  { type: 'card', label: '信用卡', emo: '💳', tracked: false }
+  { type: 'card', label: '信用卡', emo: '💳', tracked: true }
 ];
+
+export const isCard = (a) => a && a.type === 'card';
+export const isAsset = (a) => a && a.tracked && a.type !== 'card';
 
 /* 收入分類（餵金金——收入越多金金越開心） */
 export const INCOME_CATS = [

@@ -1,6 +1,6 @@
 import * as store from './db.js';
-import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, INCOME_CATS, incomeCatById, ACCOUNT_TYPES, setCats, petById, catById } from './data.js';
-import { fmt, dateStr, monthTxs, petTotals, spendTotal, incomeTotal, isSpend, isIncome, isTransfer, txKind, accountBalances, netWorth, recommendPlan, catCount, daysSinceFed, streak, feedLine, idleLine, initNextDue, postDue } from './engine.js';
+import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, INCOME_CATS, incomeCatById, ACCOUNT_TYPES, isCard, isAsset, setCats, petById, catById } from './data.js';
+import { fmt, dateStr, monthTxs, petTotals, spendTotal, incomeTotal, isSpend, isIncome, isTransfer, txKind, accountBalances, netWorth, assetTotal, cardDebtTotal, recommendPlan, catCount, daysSinceFed, streak, feedLine, idleLine, initNextDue, postDue } from './engine.js';
 import { doSync } from './sync.js';
 
 let txs = [];
@@ -12,6 +12,7 @@ let selectedPay = 'cash';
 let pending = [];
 let syncCfg = { url: '', token: '', last: 0 };
 let theme = 'auto';
+let userName = '';
 let editingCat = null;
 let tab = 'entry';
 let entryKind = 'expense'; // expense | income | transfer
@@ -57,6 +58,7 @@ async function reload() {
     token: (await store.getKV('syncToken')) || '',
     last: (await store.getKV('lastSync')) || 0
   };
+  userName = (await store.getKV('userName')) || '';
 }
 
 /* ================= entry ================= */
@@ -97,7 +99,13 @@ const KIND_META = {
 };
 
 function acctCard(p, selId, extra) {
-  const bal = p.tracked ? `<span class="pb">${fmt(balances[p.id] || 0)}</span>` : '<span class="pb tag">標籤</span>';
+  let bal;
+  if (isCard(p)) {
+    const due = Math.max(0, -(balances[p.id] || 0));
+    bal = `<span class="pb ${due > 0 ? 'due' : ''}">${due > 0 ? '待繳 ' + fmt(due) : '已繳清'}</span>`;
+  } else {
+    bal = `<span class="pb">${fmt(balances[p.id] || 0)}</span>`;
+  }
   return `<button class="pay-card ${p.id === selId ? 'on' : ''}" ${extra}="${p.id}">
     <span class="pe">${p.emo}</span><span class="pn">${p.name}</span>${bal}</button>`;
 }
@@ -151,7 +159,8 @@ function renderStep1() {
 }
 
 function renderStep2() {
-  const list = entryKind === 'expense' ? payments : payments.filter((p) => p.tracked);
+  // 支出：全部帳戶；收入：只能存進資產；轉帳轉出：只能從資產（排除信用卡）
+  const list = entryKind === 'expense' ? payments : payments.filter(isAsset);
   const selId = entryKind === 'transfer' ? transferFrom : selectedPay;
   const attr = entryKind === 'transfer' ? 'data-from' : (entryKind === 'income' ? 'data-acct' : 'data-pay');
   const cards = list.map((p) => acctCard(p, selId, attr)).join('');
@@ -230,6 +239,7 @@ function renderIncomeCats() {
 
 function renderTransferTo() {
   const from = payments.find((p) => p.id === transferFrom);
+  // 轉入可以是資產或信用卡（還卡費）
   const list = payments.filter((p) => p.tracked && p.id !== transferFrom);
   const cards = list.map((p) => acctCard(p, null, 'data-toacct')).join('');
   view.innerHTML = `
@@ -399,6 +409,7 @@ function renderHome() {
     </div>`;
 
   view.innerHTML = `
+    ${userName ? `<div class="home-title">${userName} 的怪獸小窩</div>` : ''}
     <div class="bubble"><span id="bubble-text"></span></div>
     <div class="scene">${petsHtml}</div>
     <div class="pet-labels">${labels}</div>
@@ -614,13 +625,15 @@ function renderAssets() {
   const now = new Date();
   const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
   const nw = netWorth(payments, txs);
+  const assets = assetTotal(payments, txs);
+  const debt = cardDebtTotal(payments, txs);
   const monthInc = incomeTotal(mt);
   const monthExp = spendTotal(mt);
 
-  const tracked = payments.filter((p) => p.tracked);
-  const cards = payments.filter((p) => !p.tracked);
+  const assetAccts = payments.filter(isAsset);
+  const cards = payments.filter(isCard);
 
-  const assetRows = tracked.map((p) => {
+  const assetRows = assetAccts.map((p) => {
     const b = balances[p.id] || 0;
     return `<div class="acct-row">
       <span class="ae">${p.emo}</span>
@@ -631,12 +644,17 @@ function renderAssets() {
     </div>`;
   }).join('') || '<div class="sub">還沒有資產帳戶</div>';
 
-  const cardRows = cards.map((p) =>
-    `<div class="acct-row">
+  const cardRows = cards.map((p) => {
+    const due = Math.max(0, -(balances[p.id] || 0));
+    return `<div class="acct-row">
       <span class="ae">${p.emo}</span>
-      <div class="mid"><div class="an">${p.name}</div><div class="info">信用卡（僅標籤，不計餘額）</div></div>
+      <div class="mid"><div class="an">${p.name}</div>
+        <div class="info">${due > 0 ? '本期待繳' : '已繳清 🎉'}</div></div>
+      <span class="ab ${due > 0 ? 'due' : ''}">${due > 0 ? fmt(due) : fmt(0)}</span>
+      ${due > 0 ? `<button class="chip pay-btn" data-repay="${p.id}">還款</button>` : ''}
       <button class="del" data-delpay="${p.id}">✕</button>
-    </div>`).join('') || '<div class="sub">還沒有信用卡</div>';
+    </div>`;
+  }).join('') || '<div class="sub">還沒有信用卡</div>';
 
   const typeOpts = ACCOUNT_TYPES.map((t) => `<option value="${t.type}">${t.emo} ${t.label}</option>`).join('');
 
@@ -645,6 +663,10 @@ function renderAssets() {
       <div class="nw-label">淨資產</div>
       <div class="nw-value">${fmt(nw)}</div>
       <div class="nw-io">
+        <span>資產 ${fmt(assets)}</span>
+        <span>待繳 ${fmt(debt)}</span>
+      </div>
+      <div class="nw-io" style="margin-top:4px">
         <span class="inc">本月收入 +${fmt(monthInc)}</span>
         <span class="exp">本月支出 −${fmt(monthExp)}</span>
       </div>
@@ -653,7 +675,7 @@ function renderAssets() {
     <h2>資產帳戶</h2>
     <div class="card">${assetRows}</div>
 
-    <h2>信用卡</h2>
+    <h2>信用卡待繳</h2>
     <div class="card">${cardRows}</div>
 
     <h2>新增帳戶</h2>
@@ -662,13 +684,13 @@ function renderAssets() {
         <input id="acct-emo" placeholder="圖示 emoji" maxlength="4" autocomplete="off">
         <input id="acct-name" placeholder="名稱（例如 中信帳戶）" autocomplete="off">
         <select id="acct-type" class="full">${typeOpts}</select>
-        <input id="acct-init" class="full" type="number" inputmode="numeric" placeholder="起始餘額（資產類才需要，選填）">
+        <input id="acct-init" class="full" type="number" inputmode="numeric" placeholder="起始餘額（信用卡填目前待繳，選填）">
       </div>
       <button class="btn" data-act="add-acct">新增帳戶</button>
     </div>
 
     <div class="card">
-      <div class="sub">💡 目前餘額會隨支出、收入、轉帳自動增減。第一次使用請按各帳戶的 ✎ 設定實際餘額當起點。</div>
+      <div class="sub">💡 餘額隨記帳自動增減。刷卡 → 該卡待繳增加；還卡費 → 按「還款」從帳戶轉過去、待繳歸零。第一次用請按 ✎ 設定各帳戶實際餘額（信用卡設目前待繳金額）。</div>
     </div>`;
 }
 
@@ -683,9 +705,11 @@ async function addAccount() {
     return;
   }
   const order = Math.max(0, ...payments.map((p) => p.order || 0)) + 1;
+  // 信用卡：使用者填的是待繳金額（正數），內部存成負餘額
+  const initBalance = type === 'card' ? -Math.abs(init) : init;
   await store.put('payments', {
     id: 'acct_' + store.uid().slice(0, 8), name, emo, type,
-    tracked: meta.tracked, initBalance: meta.tracked ? init : undefined, order
+    tracked: true, initBalance, order
   });
   await reload();
   renderAssets();
@@ -745,6 +769,14 @@ function renderSettings() {
     : '尚未設定。照著專案裡的 SETUP_SYNC.md 做一次（約 15 分鐘），就有雲端備份和 email 自動記帳。';
 
   view.innerHTML = `
+    <h2>使用者</h2>
+    <div class="card">
+      <div class="form-grid">
+        <input id="user-name" class="full" placeholder="你的名字（例如 Jason）" value="${userName.replace(/"/g, '&quot;')}" autocomplete="off">
+      </div>
+      <button class="btn" data-act="save-name">儲存名字</button>
+    </div>
+
     <h2>外觀</h2>
     <div class="card"><div class="theme-row">${themeBtns}</div></div>
 
@@ -853,11 +885,12 @@ async function delCat(id) {
 }
 
 function exportData() {
-  const payload = { app: 'pet-ledger', exportedAt: new Date().toISOString(), txs, recurring, cats, payments, theme };
+  const payload = { app: 'pet-ledger', user: userName, exportedAt: new Date().toISOString(), txs, recurring, cats, payments, theme };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `pet-ledger-backup-${dateStr(new Date())}.json`;
+  const who = userName ? userName.replace(/[^\w一-龥]/g, '') + '-' : '';
+  a.download = `${who}怪獸小窩-備份-${dateStr(new Date())}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -958,14 +991,34 @@ view.addEventListener('click', async (e) => {
   if (setbal) {
     const p = payments.find((x) => x.id === setbal.dataset.setbal);
     const cur = balances[p.id] || 0;
-    const val = prompt(`設定「${p.name}」目前實際餘額`, String(Math.round(cur)));
+    const card = isCard(p);
+    const promptDefault = card ? String(Math.round(Math.max(0, -cur))) : String(Math.round(cur));
+    const val = prompt(card ? `設定「${p.name}」目前待繳金額` : `設定「${p.name}」目前實際餘額`, promptDefault);
     if (val === null) return;
-    const target = Number(val) || 0;
+    const target = card ? -Math.abs(Number(val) || 0) : (Number(val) || 0);
     const txDelta = cur - (p.initBalance || 0);   // 交易造成的變動
     p.initBalance = target - txDelta;              // 反推起始餘額，使計算餘額 = 目標
     await store.put('payments', p);
     await reload();
     renderAssets();
+    return;
+  }
+
+  const repay = e.target.closest('[data-repay]');
+  if (repay) {
+    const card = payments.find((x) => x.id === repay.dataset.repay);
+    const due = Math.max(0, -(balances[card.id] || 0));
+    const sources = payments.filter(isAsset);
+    if (!sources.length) { showToast('沒有可付款的資產帳戶'); return; }
+    const from = sources.find((p) => p.type === 'bank') || sources[0];
+    const val = prompt(`還「${card.name}」多少？（待繳 ${fmt(due)}，從「${from.name}」扣）`, String(Math.round(due)));
+    if (val === null) return;
+    const amt = Number(val);
+    if (!amt || amt <= 0) { showToast('金額不對喔'); return; }
+    await store.put('tx', { id: store.uid(), kind: 'transfer', amount: amt, note: card.name + ' 還款', ts: Date.now(), source: 'manual', fromPay: from.id, toPay: card.id });
+    await reload();
+    renderAssets();
+    showToast(`💳 已還 ${card.name} ${fmt(amt)}（從 ${from.name} 扣）`);
     return;
   }
 
@@ -1052,6 +1105,13 @@ view.addEventListener('click', async (e) => {
   }
   if (a === 'topup') return topupEasycard();
   if (a === 'add-acct') return addAccount();
+  if (a === 'save-name') {
+    userName = document.getElementById('user-name').value.trim();
+    await store.setKV('userName', userName);
+    render();
+    showToast(userName ? `你好，${userName}！🐾` : '已清除名字');
+    return;
+  }
   if (a === 'save-sync') {
     await store.setKV('syncUrl', document.getElementById('sync-url').value.trim());
     await store.setKV('syncToken', document.getElementById('sync-token').value.trim());
@@ -1166,6 +1226,17 @@ async function boot() {
       await store.put('payments', { id: 'bank', name: '銀行帳戶', emo: '🏦', type: 'bank', tracked: true, initBalance: 0, order: 1.5 });
     }
     await store.setKV('acctV4', 1);
+  }
+
+  // 一次性遷移：信用卡改為可追蹤（待繳），起始待繳 0
+  if (!(await store.getKV('acctV5'))) {
+    const accs = await store.getAll('payments');
+    for (const p of accs) {
+      if (p.type === 'card' && !p.tracked) {
+        await store.put('payments', { ...p, tracked: true, initBalance: 0 });
+      }
+    }
+    await store.setKV('acctV5', 1);
   }
 
   await reload();

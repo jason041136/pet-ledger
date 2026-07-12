@@ -29,6 +29,18 @@ export function netWorth(accounts, txs) {
   return accounts.filter((a) => a.tracked).reduce((s, a) => s + (bal[a.id] || 0), 0);
 }
 
+// 資產總額（現金/銀行/悠遊卡/投資，不含信用卡）
+export function assetTotal(accounts, txs) {
+  const bal = accountBalances(accounts, txs);
+  return accounts.filter((a) => a.tracked && a.type !== 'card').reduce((s, a) => s + (bal[a.id] || 0), 0);
+}
+
+// 信用卡待繳總額（卡的負餘額轉正）
+export function cardDebtTotal(accounts, txs) {
+  const bal = accountBalances(accounts, txs);
+  return accounts.filter((a) => a.type === 'card').reduce((s, a) => s + Math.max(0, -(bal[a.id] || 0)), 0);
+}
+
 export function incomeTotal(list) {
   return list.filter(isIncome).reduce((a, t) => a + t.amount, 0);
 }
