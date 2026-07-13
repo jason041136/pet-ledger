@@ -13,6 +13,8 @@ let pending = [];
 let syncCfg = { url: '', token: '', last: 0 };
 let theme = 'auto';
 let userName = '';
+let budgets = { total: 0, pets: {} };
+let hasPin = false;
 let editingCat = null;
 let tab = 'entry';
 let entryKind = 'expense'; // expense | income | transfer
@@ -22,6 +24,9 @@ let entryStep = 1;
 let transferFrom = null;
 let ledgerDate = new Date();
 let ledgerMode = 'list';
+let ledgerSearch = '';
+let ledgerSelDay = null;
+let statsPeriod = 'month';   // month | year
 
 const view = document.getElementById('view');
 const tabbar = document.getElementById('tabbar');
@@ -42,6 +47,55 @@ function applyTheme(t) {
   else document.documentElement.dataset.theme = t;
 }
 
+async function sha256(s) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('pet-ledger:' + s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function showLockScreen() {
+  return new Promise((resolve) => {
+    let entered = '';
+    const draw = (err) => {
+      view.innerHTML = `
+        <div class="lock-wrap">
+          <div class="lock-emo">🔒</div>
+          <div class="lock-title">${userName ? userName + ' 的' : ''}怪獸小窩</div>
+          <div class="lock-sub ${err ? 'err' : ''}">${err || '輸入 4 位數 PIN'}</div>
+          <div class="lock-dots">${[0, 1, 2, 3].map((i) => `<i class="${i < entered.length ? 'on' : ''}"></i>`).join('')}</div>
+          <div class="lock-pad">
+            ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-pin="${n}">${n}</button>`).join('')}
+            <span></span>
+            <button data-pin="0">0</button>
+            <button data-pin="del" class="fn">⌫</button>
+          </div>
+        </div>`;
+    };
+    tabbar.style.display = 'none';
+    draw();
+    const handler = async (e) => {
+      const b = e.target.closest('[data-pin]');
+      if (!b) return;
+      const k = b.dataset.pin;
+      if (k === 'del') entered = entered.slice(0, -1);
+      else if (entered.length < 4) entered += k;
+      draw();
+      if (entered.length === 4) {
+        const ok = (await sha256(entered)) === (await store.getKV('pinHash'));
+        if (ok) {
+          view.removeEventListener('click', handler);
+          tabbar.style.display = '';
+          resolve();
+        } else {
+          entered = '';
+          if (navigator.vibrate) navigator.vibrate(200);
+          draw('PIN 不對，再試一次');
+        }
+      }
+    };
+    view.addEventListener('click', handler);
+  });
+}
+
 async function reload() {
   txs = await store.getAll('tx');
   recurring = await store.getAll('recurring');
@@ -59,6 +113,9 @@ async function reload() {
     last: (await store.getKV('lastSync')) || 0
   };
   userName = (await store.getKV('userName')) || '';
+  budgets = (await store.getKV('budgets')) || { total: 0, pets: {} };
+  if (!budgets.pets) budgets.pets = {};
+  hasPin = !!(await store.getKV('pinHash'));
 }
 
 /* ================= entry ================= */
@@ -143,8 +200,14 @@ function renderStep1() {
       <button class="${entryKind === 'transfer' ? 'on tr' : ''}" data-kind="transfer">轉帳</button>
     </div>
     ${stepDots(1)}
-    <div class="amount-box"><span class="cur">NT$</span><span class="num zero" id="amt">0</span></div>
+    <div class="amount-box">
+      <div><span class="cur">NT$</span><span class="num zero" id="amt">0</span></div>
+      <div class="amt-expr" id="amt-expr"></div>
+    </div>
     <input class="note-input" id="note" placeholder="備註（選填）" autocomplete="off" value="${noteVal.replace(/"/g, '&quot;')}">
+    <div class="op-row">
+      ${['+', '−', '×', '÷'].map((o) => `<button data-op="${o}">${o}</button>`).join('')}
+    </div>
     <div class="keypad">
       ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-key="${n}">${n}</button>`).join('')}
       <button data-key="C" class="fn">C</button>
@@ -254,17 +317,40 @@ function renderTransferTo() {
     <div class="pay-grid">${cards}</div>`;
 }
 
+function evalExpr(s) {
+  if (!s) return 0;
+  let e = String(s).replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-');
+  e = e.replace(/[+\-*/.]+$/, '');   // 去掉結尾懸空的運算子
+  if (!e) return 0;
+  if (!/^[0-9+\-*/.]+$/.test(e)) return NaN;
+  try {
+    const v = Function('"use strict";return(' + e + ')')();
+    return isFinite(v) ? Math.round(v * 100) / 100 : NaN;
+  } catch { return NaN; }
+}
+
 function updateAmt() {
   const el = document.getElementById('amt');
   if (!el) return;
-  el.textContent = amount ? Number(amount).toLocaleString('zh-TW') : '0';
+  const hasOp = /[+\-×÷]/.test(amount);
+  const val = evalExpr(amount);
+  el.textContent = amount ? (isNaN(val) ? '…' : Number(val).toLocaleString('zh-TW')) : '0';
   el.classList.toggle('zero', !amount);
+  const ex = document.getElementById('amt-expr');
+  if (ex) ex.textContent = hasOp ? amount : '';
 }
 
 function pressKey(k) {
   if (k === 'C') amount = '';
   else if (k === 'B') amount = amount.slice(0, -1);
-  else if (amount.length < 9 && !(amount === '' && k === '0')) amount += k;
+  else if (amount.length < 30 && !(amount === '' && k === '0')) amount += k;
+  updateAmt();
+}
+
+function pressOp(op) {
+  if (!amount) return;                       // 不能以運算子開頭
+  if (/[+\-×÷]$/.test(amount)) amount = amount.slice(0, -1) + op;  // 換掉結尾運算子
+  else amount += op;
   updateAmt();
 }
 
@@ -389,8 +475,23 @@ function renderHome() {
   }).join('');
   const labels = PETS.map((p) => {
     const pct = monthTotal ? Math.round(((totals[p.id] || 0) / monthTotal) * 100) : 0;
-    return `<div><div class="n">${p.name}</div><div class="c">${p.title} ${pct}%</div></div>`;
+    const pb = budgets.pets[p.id];
+    const over = pb && (totals[p.id] || 0) > pb;
+    return `<div><div class="n">${p.name}${over ? ' ⚠️' : ''}</div><div class="c">${over ? '<span style="color:var(--accent-deep)">超支</span>' : p.title + ' ' + pct + '%'}</div></div>`;
   }).join('');
+
+  // 預算進度
+  let budgetHtml = '';
+  if (budgets.total > 0) {
+    const pctUsed = Math.round((monthTotal / budgets.total) * 100);
+    const over = monthTotal > budgets.total;
+    const cls = over ? 'over' : pctUsed >= 80 ? 'warn' : '';
+    budgetHtml = `<div class="budget-card">
+      <div class="budget-top"><span>本月預算</span><span class="${over ? 'over-t' : ''}">${fmt(monthTotal)} / ${fmt(budgets.total)}</span></div>
+      <div class="budget-track"><div class="budget-fill ${cls}" style="width:${Math.min(100, pctUsed)}%"></div></div>
+      <div class="budget-note">${over ? `⚠️ 超支 ${fmt(monthTotal - budgets.total)}，怪獸們吃太飽啦！` : `還剩 ${fmt(budgets.total - monthTotal)}（用了 ${pctUsed}%）`}</div>
+    </div>`;
+  }
 
   const today = dateStr(now);
   const todayTxs = txs.filter((t) => dateStr(new Date(t.ts)) === today);
@@ -413,6 +514,7 @@ function renderHome() {
     <div class="bubble"><span id="bubble-text"></span></div>
     <div class="scene">${petsHtml}</div>
     <div class="pet-labels">${labels}</div>
+    ${budgetHtml}
     ${recHtml}
     <div class="stat-row">
       <div class="stat"><div class="k">本月支出</div><div class="v">${fmt(monthTotal)}</div></div>
@@ -459,6 +561,15 @@ function setBubble(text, color) {
 
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
 
+function txMatches(t, q) {
+  if (!q) return true;
+  const k = txKind(t);
+  const catName = k === 'income' ? incomeCatById(t.catId).name : k === 'transfer' ? '轉帳' : catById(t.catId).name;
+  const pay = payments.find((p) => p.id === t.payId);
+  const hay = [catName, t.note || '', pay ? pay.name : '', String(Math.round(t.amount))].join(' ').toLowerCase();
+  return hay.includes(q.toLowerCase());
+}
+
 function renderLedger() {
   const y = ledgerDate.getFullYear();
   const m = ledgerDate.getMonth();
@@ -466,7 +577,20 @@ function renderLedger() {
   const spend = spendTotal(mt);
   const income = incomeTotal(mt);
 
-  const body = ledgerMode === 'list' ? ledgerList(mt) : ledgerStats(mt, y, m);
+  // 搜尋模式：跨全部帳目過濾
+  if (ledgerSearch) {
+    const hits = txs.filter((t) => txMatches(t, ledgerSearch));
+    view.innerHTML = `
+      ${ledgerSearchBar()}
+      <div class="sub" style="margin:2px 4px 10px">找到 ${hits.length} 筆「${ledgerSearch}」</div>
+      ${ledgerList(hits, true)}`;
+    wireSearch();
+    return;
+  }
+
+  const body = ledgerMode === 'stats' ? ledgerStats(mt, y, m)
+    : ledgerMode === 'calendar' ? ledgerCalendar(mt, y, m)
+    : ledgerList(mt);
 
   view.innerHTML = `
     <div class="month-nav">
@@ -479,74 +603,135 @@ function renderLedger() {
       <div class="io"><span class="k">支出</span><span class="v exp">−${fmt(spend)}</span></div>
       <div class="io"><span class="k">結餘</span><span class="v ${income - spend >= 0 ? 'inc' : 'exp'}">${income - spend >= 0 ? '+' : '−'}${fmt(Math.abs(income - spend))}</span></div>
     </div>
+    ${ledgerSearchBar()}
     <div class="seg">
       <button data-act="mode-list" class="${ledgerMode === 'list' ? 'on' : ''}">明細</button>
+      <button data-act="mode-calendar" class="${ledgerMode === 'calendar' ? 'on' : ''}">日曆</button>
       <button data-act="mode-stats" class="${ledgerMode === 'stats' ? 'on' : ''}">分析</button>
     </div>
     ${body}`;
+  wireSearch();
 }
 
-function ledgerList(mt) {
-  const totals = petTotals(mt);
-  const chips = PETS.map((p) =>
-    `<span class="pt" style="border-color:${p.color}">${p.name} ${fmt(totals[p.id] || 0)}</span>`
-  ).join('');
+function ledgerSearchBar() {
+  return `<div class="search-bar">
+    <input id="tx-search" placeholder="🔍 搜尋帳目（分類、備註、金額）" value="${ledgerSearch.replace(/"/g, '&quot;')}" autocomplete="off">
+    ${ledgerSearch ? '<button class="search-clear" data-act="clear-search">✕</button>' : ''}
+  </div>`;
+}
 
-  const byDay = {};
+function wireSearch() {
+  const el = document.getElementById('tx-search');
+  if (!el) return;
+  el.addEventListener('input', (e) => {
+    const wasEmpty = !ledgerSearch;
+    ledgerSearch = e.target.value.trim();
+    const pos = e.target.selectionStart;
+    renderLedger();
+    const ne = document.getElementById('tx-search');
+    if (ne) { ne.focus(); try { ne.setSelectionRange(pos, pos); } catch {} }
+  });
+}
+
+function ledgerCalendar(mt, y, m) {
+  const spendByDay = {}, incByDay = {};
   for (const t of mt) {
+    const day = new Date(t.ts).getDate();
+    if (isSpend(t)) spendByDay[day] = (spendByDay[day] || 0) + t.amount;
+    else if (isIncome(t)) incByDay[day] = (incByDay[day] || 0) + t.amount;
+  }
+  const first = new Date(y, m, 1).getDay();
+  const days = new Date(y, m + 1, 0).getDate();
+  const todayStr = dateStr(new Date());
+  let cells = WEEK.map((w) => `<div class="cal-wk">${w}</div>`).join('');
+  for (let i = 0; i < first; i++) cells += '<div class="cal-cell empty"></div>';
+  for (let d = 1; d <= days; d++) {
+    const ds = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const sp = spendByDay[d], inc = incByDay[d];
+    const sel = ledgerSelDay === d ? ' sel' : '';
+    const isToday = ds === todayStr ? ' today' : '';
+    cells += `<div class="cal-cell${sel}${isToday}" data-calday="${d}">
+      <div class="cal-d">${d}</div>
+      ${sp ? `<div class="cal-sp">${sp >= 1000 ? Math.round(sp / 100) / 10 + 'k' : sp}</div>` : ''}
+      ${inc ? `<div class="cal-inc">+${inc >= 1000 ? Math.round(inc / 100) / 10 + 'k' : inc}</div>` : ''}
+    </div>`;
+  }
+  let detail = '';
+  if (ledgerSelDay) {
+    const dayTxs = mt.filter((t) => new Date(t.ts).getDate() === ledgerSelDay);
+    detail = `<div class="day-head">${m + 1}/${ledgerSelDay} 明細</div>${dayTxs.length ? ledgerRows(dayTxs) : '<div class="empty">這天沒有帳目</div>'}`;
+  }
+  return `<div class="cal-grid">${cells}</div>${detail}`;
+}
+
+function txRowHtml(t) {
+  const kind = txKind(t);
+  if (kind === 'transfer') {
+    const from = payments.find((x) => x.id === t.fromPay);
+    const to = payments.find((x) => x.id === (t.toPay != null ? t.toPay : t.payId));
+    return `<div class="tx-row transfer-row">
+      <span class="emo">🔄</span>
+      <div class="mid"><div class="cat">轉帳</div>
+        <div class="note">${from ? from.name : '?'} → ${to ? to.name : '?'}${t.note && t.note !== '悠遊卡加值' ? ' · ' + t.note : ''}</div></div>
+      <span class="amt">${fmt(t.amount)}</span>
+      <button class="del" data-del="${t.id}">✕</button>
+    </div>`;
+  }
+  if (kind === 'income') {
+    const c = incomeCatById(t.catId);
+    const acct = payments.find((x) => x.id === t.payId);
+    return `<div class="tx-row income-row">
+      <span class="emo">${c.emo}</span>
+      <div class="mid"><div class="cat">${c.name}${acct ? ` <span class="paytag">${acct.emo}${acct.name}</span>` : ''}</div>
+        ${t.note ? `<div class="note">${t.note}</div>` : ''}</div>
+      <span class="amt inc">+${fmt(t.amount)}</span>
+      <button class="del" data-del="${t.id}">✕</button>
+    </div>`;
+  }
+  const pay = payments.find((x) => x.id === t.payId);
+  const payTag = pay ? ` <span class="paytag">${pay.emo}${pay.name}</span>` : '';
+  const c = catById(t.catId);
+  const p = petById(c.pet);
+  return `<div class="tx-row">
+    <span class="emo">${c.emo}</span>
+    <div class="mid">
+      <div class="cat">${c.name}${t.source === 'recurring' ? ' 🔁' : ''}${payTag}</div>
+      ${t.note ? `<div class="note">${t.note}</div>` : ''}
+    </div>
+    <span class="amt" style="color:${p.deep}">−${fmt(t.amount)}</span>
+    <button class="del" data-del="${t.id}">✕</button>
+  </div>`;
+}
+
+function ledgerRows(list) {
+  const byDay = {};
+  for (const t of list) {
     const k = dateStr(new Date(t.ts));
     (byDay[k] = byDay[k] || []).push(t);
   }
-  const days = Object.keys(byDay).sort().reverse();
-  const list = days.map((k) => {
+  return Object.keys(byDay).sort().reverse().map((k) => {
     const d = new Date(k + 'T12:00:00');
-    const rows = byDay[k].map((t) => {
-      const kind = txKind(t);
-      if (kind === 'transfer') {
-        const from = payments.find((x) => x.id === t.fromPay);
-        const to = payments.find((x) => x.id === (t.toPay != null ? t.toPay : t.payId));
-        return `<div class="tx-row transfer-row">
-          <span class="emo">🔄</span>
-          <div class="mid"><div class="cat">轉帳</div>
-            <div class="note">${from ? from.name : '?'} → ${to ? to.name : '?'}${t.note && t.note !== '悠遊卡加值' ? ' · ' + t.note : ''}</div></div>
-          <span class="amt">${fmt(t.amount)}</span>
-          <button class="del" data-del="${t.id}">✕</button>
-        </div>`;
-      }
-      if (kind === 'income') {
-        const c = incomeCatById(t.catId);
-        const acct = payments.find((x) => x.id === t.payId);
-        return `<div class="tx-row income-row">
-          <span class="emo">${c.emo}</span>
-          <div class="mid"><div class="cat">${c.name}${acct ? ` <span class="paytag">${acct.emo}${acct.name}</span>` : ''}</div>
-            ${t.note ? `<div class="note">${t.note}</div>` : ''}</div>
-          <span class="amt inc">+${fmt(t.amount)}</span>
-          <button class="del" data-del="${t.id}">✕</button>
-        </div>`;
-      }
-      const pay = payments.find((x) => x.id === t.payId);
-      const payTag = pay ? ` <span class="paytag">${pay.emo}${pay.name}</span>` : '';
-      const c = catById(t.catId);
-      const p = petById(c.pet);
-      return `<div class="tx-row">
-        <span class="emo">${c.emo}</span>
-        <div class="mid">
-          <div class="cat">${c.name}${t.source === 'recurring' ? ' 🔁' : ''}${payTag}</div>
-          ${t.note ? `<div class="note">${t.note}</div>` : ''}
-        </div>
-        <span class="amt" style="color:${p.deep}">−${fmt(t.amount)}</span>
-        <button class="del" data-del="${t.id}">✕</button>
-      </div>`;
-    }).join('');
-    return `<div class="day-head">${d.getMonth() + 1}/${d.getDate()}（週${WEEK[d.getDay()]}）</div>${rows}`;
+    return `<div class="day-head">${d.getMonth() + 1}/${d.getDate()}（週${WEEK[d.getDay()]}）</div>${byDay[k].map(txRowHtml).join('')}`;
   }).join('');
-
-  return `<div class="pet-totals">${chips}</div>${list || '<div class="empty">這個月沒有帳目</div>'}`;
 }
 
-function ledgerStats(mt, y, m) {
-  mt = mt.filter(isSpend);
-  if (!mt.length) return '<div class="empty">這個月沒有帳目，沒東西好分析</div>';
+function ledgerList(mt, noChips) {
+  const totals = petTotals(mt);
+  const chips = noChips ? '' : `<div class="pet-totals">${PETS.map((p) =>
+    `<span class="pt" style="border-color:${p.color}">${p.name} ${fmt(totals[p.id] || 0)}</span>`).join('')}</div>`;
+  const list = ledgerRows(mt);
+  return `${chips}${list || '<div class="empty">沒有帳目</div>'}`;
+}
+
+function ledgerStats(monthList, y, m) {
+  const yearMode = statsPeriod === 'year';
+  const scope = yearMode ? txs.filter((t) => new Date(t.ts).getFullYear() === y) : monthList;
+  const periodToggle = `<div class="seg" style="margin-bottom:12px">
+    <button data-act="period-month" class="${!yearMode ? 'on' : ''}">本月</button>
+    <button data-act="period-year" class="${yearMode ? 'on' : ''}">整年</button>
+  </div>`;
+  const mt = scope.filter(isSpend);
+  if (!mt.length) return `${periodToggle}<div class="empty">${yearMode ? '今年' : '這個月'}沒有帳目，沒東西好分析</div>`;
 
   const totals = petTotals(mt);
   const monthTotal = mt.reduce((a, t) => a + t.amount, 0);
@@ -581,9 +766,22 @@ function ledgerStats(mt, y, m) {
       <span class="val">${fmt(v)}</span></div>`;
   }).join('');
 
+  // 單筆消費排行（最貴的 5 筆）
+  const topTx = [...mt].sort((a, b) => b.amount - a.amount).slice(0, 5);
+  const bigRows = topTx.map((t) => {
+    const c = catById(t.catId);
+    const d = new Date(t.ts);
+    return `<div class="tx-row" style="box-shadow:none">
+      <span class="emo">${c.emo}</span>
+      <div class="mid"><div class="cat">${c.name}</div>
+        <div class="note">${d.getMonth() + 1}/${d.getDate()}${t.note ? ' · ' + t.note : ''}</div></div>
+      <span class="amt" style="color:${petById(c.pet).deep}">${fmt(t.amount)}</span></div>`;
+  }).join('');
+
   const months = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(y, m - i, 1);
+  const span = yearMode ? 12 : 6;
+  for (let i = span - 1; i >= 0; i--) {
+    const d = yearMode ? new Date(y, 11 - i, 1) : new Date(y, m - i, 1);
     const total = spendTotal(monthTxs(txs, d.getFullYear(), d.getMonth()));
     months.push({ label: `${d.getMonth() + 1}月`, total });
   }
@@ -609,13 +807,16 @@ function ledgerStats(mt, y, m) {
   }).join('');
 
   return `
-    <h2>怪獸佔比</h2>
+    ${periodToggle}
+    <h2>${yearMode ? '今年' : '本月'}支出 ${fmt(monthTotal)}</h2>
     <div class="card"><div class="donut-wrap"><svg viewBox="0 0 120 120">${arcs}</svg><div class="legend">${legend}</div></div></div>
     <h2>分類排行</h2>
     <div class="card">${bars}</div>
+    <h2>最貴的 5 筆</h2>
+    <div class="card">${bigRows}</div>
     <h2>支付方式</h2>
-    <div class="card">${payBars || '<div class="sub">本月帳目還沒有支付方式標記</div>'}</div>
-    <h2>近六個月趨勢</h2>
+    <div class="card">${payBars || '<div class="sub">還沒有支付方式標記</div>'}</div>
+    <h2>${yearMode ? '今年各月' : '近六個月'}趨勢</h2>
     <div class="card"><div class="trend">${trend}</div></div>`;
 }
 
@@ -768,6 +969,16 @@ function renderSettings() {
     ? (syncCfg.last ? `上次同步：${new Date(syncCfg.last).toLocaleString('zh-TW')}` : '已設定，尚未同步')
     : '尚未設定。照著專案裡的 SETUP_SYNC.md 做一次（約 15 分鐘），就有雲端備份和 email 自動記帳。';
 
+  const petBudgetRows = PETS.map((p) =>
+    `<div class="rec-row">
+      <span class="dot" style="width:11px;height:11px;border-radius:50%;background:${p.color};flex-shrink:0"></span>
+      <div class="mid"><div class="name">${p.name}（${p.title}）</div></div>
+      <input id="bud-${p.id}" type="number" inputmode="numeric" placeholder="不限" value="${budgets.pets[p.id] || ''}"
+        style="width:96px;background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:8px;font-size:14px;color:var(--text);font-family:var(--font-num)">
+    </div>`).join('');
+
+  const pinSet = hasPin;
+
   view.innerHTML = `
     <h2>使用者</h2>
     <div class="card">
@@ -804,6 +1015,28 @@ function renderSettings() {
       <button class="btn" data-act="add-rec">新增</button>
     </div>
 
+    <h2>預算</h2>
+    <div class="card">
+      <div class="rec-row">
+        <div class="mid"><div class="name">每月總預算</div><div class="info">超支時怪獸會吃太飽發出警告</div></div>
+        <input id="bud-total" type="number" inputmode="numeric" placeholder="不限" value="${budgets.total || ''}"
+          style="width:110px;background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:8px;font-size:14px;color:var(--text);font-family:var(--font-num)">
+      </div>
+    </div>
+    <div class="card">
+      <div class="sub">各怪獸分項預算（選填，超支該怪獸會標 ⚠️）</div>
+      ${petBudgetRows}
+      <button class="btn" data-act="save-budget">儲存預算</button>
+    </div>
+
+    <h2>安全</h2>
+    <div class="card">
+      <div class="rec-row">
+        <div class="mid"><div class="name">App 密碼鎖</div><div class="info">${pinSet ? '已啟用 4 位數 PIN' : '打開 App 需輸入 4 位數 PIN'}</div></div>
+        <button class="chip" data-act="${pinSet ? 'remove-pin' : 'set-pin'}">${pinSet ? '關閉' : '設定'}</button>
+      </div>
+    </div>
+
     <h2>分類管理</h2>
     <div class="card">${catRows}</div>
     <div class="card">
@@ -820,6 +1053,7 @@ function renderSettings() {
     <div class="card">
       <div class="sub">共 ${txs.length} 筆帳目。資料存在這台裝置的瀏覽器裡，記得偶爾匯出備份；換手機時用「匯入備份」搬家。</div>
       <button class="btn ghost" data-act="export">匯出備份（JSON）</button>
+      <button class="btn ghost" data-act="export-csv">匯出報表（CSV／Excel）</button>
       <button class="btn ghost" data-act="import">匯入備份</button>
       <input type="file" id="import-file" accept=".json,application/json" hidden>
     </div>`;
@@ -895,6 +1129,38 @@ function exportData() {
   URL.revokeObjectURL(a.href);
 }
 
+function exportCSV() {
+  const esc = (s) => `"${String(s == null ? '' : s).replace(/"/g, '""')}"`;
+  const kindLabel = { expense: '支出', income: '收入', transfer: '轉帳' };
+  const rows = [['日期', '時間', '類型', '分類', '金額', '帳戶／轉出', '轉入', '備註']];
+  for (const t of [...txs].sort((a, b) => a.ts - b.ts)) {
+    const d = new Date(t.ts);
+    const k = txKind(t);
+    let catName = '', acct = '', to = '';
+    if (k === 'transfer') {
+      catName = '轉帳';
+      acct = (payments.find((p) => p.id === t.fromPay) || {}).name || '';
+      to = (payments.find((p) => p.id === (t.toPay != null ? t.toPay : t.payId)) || {}).name || '';
+    } else if (k === 'income') {
+      catName = incomeCatById(t.catId).name;
+      acct = (payments.find((p) => p.id === t.payId) || {}).name || '';
+    } else {
+      catName = catById(t.catId).name;
+      acct = (payments.find((p) => p.id === t.payId) || {}).name || '';
+    }
+    rows.push([dateStr(d), d.toTimeString().slice(0, 5), kindLabel[k], catName, Math.round(t.amount), acct, to, t.note || '']);
+  }
+  const csv = '﻿' + rows.map((r) => r.map(esc).join(',')).join('\r\n'); // BOM 讓 Excel 正確顯示中文
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const who = userName ? userName.replace(/[^\w一-龥]/g, '') + '-' : '';
+  a.download = `${who}怪獸小窩-報表-${dateStr(new Date())}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast('📄 CSV 報表已匯出，可用 Excel 開啟');
+}
+
 async function importData(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -933,7 +1199,7 @@ tabbar.addEventListener('click', (e) => {
   if (!btn) return;
   const prev = tab;
   tab = btn.dataset.tab;
-  if (tab === 'ledger') ledgerDate = new Date();
+  if (tab === 'ledger') { ledgerDate = new Date(); ledgerSearch = ''; ledgerSelDay = null; }
   if (tab === 'entry' && prev !== 'entry') { entryStep = 1; entryKind = 'expense'; transferFrom = null; }
   render();
 });
@@ -941,6 +1207,9 @@ tabbar.addEventListener('click', (e) => {
 view.addEventListener('click', async (e) => {
   const key = e.target.closest('[data-key]');
   if (key) return pressKey(key.dataset.key);
+
+  const op = e.target.closest('[data-op]');
+  if (op) return pressOp(op.dataset.op);
 
   const chip = e.target.closest('[data-cat]');
   if (chip) return saveTx(chip.dataset.cat);
@@ -1051,6 +1320,13 @@ view.addEventListener('click', async (e) => {
   const delcat = e.target.closest('[data-delcat]');
   if (delcat) return delCat(delcat.dataset.delcat);
 
+  const calCell = e.target.closest('[data-calday]');
+  if (calCell) {
+    const d = Number(calCell.dataset.calday);
+    ledgerSelDay = ledgerSelDay === d ? null : d;
+    return renderLedger();
+  }
+
   const pendOk = e.target.closest('[data-pend-ok]');
   if (pendOk) return resolvePending(pendOk.dataset.pendOk, true);
 
@@ -1084,10 +1360,12 @@ view.addEventListener('click', async (e) => {
   if (!act) return;
   const a = act.dataset.act;
   if (a === 'next-step') {
-    if (!Number(amount)) {
+    const v = evalExpr(amount);
+    if (!v || isNaN(v)) {
       showToast('先輸入金額喔！');
       return;
     }
+    amount = String(v);            // 運算式求值後變純數字
     noteVal = document.getElementById('note')?.value || '';
     entryStep = 2;
     return renderEntry();
@@ -1110,6 +1388,41 @@ view.addEventListener('click', async (e) => {
     await store.setKV('userName', userName);
     render();
     showToast(userName ? `你好，${userName}！🐾` : '已清除名字');
+    return;
+  }
+  if (a === 'save-budget') {
+    const total = Number(document.getElementById('bud-total').value) || 0;
+    const pets = {};
+    for (const p of PETS) {
+      const v = Number(document.getElementById('bud-' + p.id).value) || 0;
+      if (v > 0) pets[p.id] = v;
+    }
+    budgets = { total, pets };
+    await store.setKV('budgets', budgets);
+    renderSettings();
+    showToast('💰 預算已儲存');
+    return;
+  }
+  if (a === 'set-pin') {
+    const pin = prompt('設定 4 位數 PIN（打開 App 要輸入）');
+    if (pin === null) return;
+    if (!/^\d{4}$/.test(pin)) { showToast('請輸入 4 位數字'); return; }
+    const confirm2 = prompt('再輸入一次確認');
+    if (confirm2 !== pin) { showToast('兩次不一樣，重設一次'); return; }
+    await store.setKV('pinHash', await sha256(pin));
+    hasPin = true;
+    renderSettings();
+    showToast('🔒 密碼鎖已啟用');
+    return;
+  }
+  if (a === 'remove-pin') {
+    const pin = prompt('輸入目前 PIN 以關閉');
+    if (pin === null) return;
+    if ((await sha256(pin)) !== (await store.getKV('pinHash'))) { showToast('PIN 不對'); return; }
+    await store.setKV('pinHash', null);
+    hasPin = false;
+    renderSettings();
+    showToast('🔓 密碼鎖已關閉');
     return;
   }
   if (a === 'save-sync') {
@@ -1135,11 +1448,16 @@ view.addEventListener('click', async (e) => {
     return;
   }
   if (a === 'export') return exportData();
+  if (a === 'export-csv') return exportCSV();
   if (a === 'import') return document.getElementById('import-file').click();
   if (a === 'mode-list') { ledgerMode = 'list'; return renderLedger(); }
+  if (a === 'mode-calendar') { ledgerMode = 'calendar'; return renderLedger(); }
   if (a === 'mode-stats') { ledgerMode = 'stats'; return renderLedger(); }
-  if (a === 'prev-month') { ledgerDate.setMonth(ledgerDate.getMonth() - 1); return renderLedger(); }
-  if (a === 'next-month') { ledgerDate.setMonth(ledgerDate.getMonth() + 1); return renderLedger(); }
+  if (a === 'period-month') { statsPeriod = 'month'; return renderLedger(); }
+  if (a === 'period-year') { statsPeriod = 'year'; return renderLedger(); }
+  if (a === 'clear-search') { ledgerSearch = ''; return renderLedger(); }
+  if (a === 'prev-month') { ledgerDate.setMonth(ledgerDate.getMonth() - 1); ledgerSelDay = null; return renderLedger(); }
+  if (a === 'next-month') { ledgerDate.setMonth(ledgerDate.getMonth() + 1); ledgerSelDay = null; return renderLedger(); }
 });
 
 /* ================= boot ================= */
@@ -1147,6 +1465,12 @@ view.addEventListener('click', async (e) => {
 async function boot() {
   const savedTheme = await store.getKV('theme');
   if (savedTheme) applyTheme(savedTheme);
+
+  // 密碼鎖：有設 PIN 就先鎖住
+  if (await store.getKV('pinHash')) {
+    userName = (await store.getKV('userName')) || '';
+    await showLockScreen();
+  }
 
   const existing = await store.getAll('cats');
   if (!existing.length) {
