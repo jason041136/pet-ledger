@@ -1,5 +1,5 @@
 import * as store from './db.js';
-import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, INCOME_CATS, incomeCatById, ACCOUNT_TYPES, isCard, isAsset, setCats, petById, catById } from './data.js';
+import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, INCOME_CATS, incomeCatById, ACCOUNT_TYPES, COIN, COSTUMES, costumeById, ACHIEVEMENTS, isCard, isAsset, setCats, petById, catById } from './data.js';
 import { fmt, dateStr, monthTxs, petTotals, spendTotal, incomeTotal, isSpend, isIncome, isTransfer, txKind, accountBalances, netWorth, assetTotal, cardDebtTotal, recommendPlan, catCount, daysSinceFed, streak, feedLine, idleLine, initNextDue, postDue } from './engine.js';
 import { doSync } from './sync.js';
 
@@ -15,6 +15,12 @@ let theme = 'auto';
 let userName = '';
 let budgets = { total: 0, pets: {} };
 let hasPin = false;
+let coins = 0;
+let owned = [];
+let equipped = {};
+let achieved = [];
+let homeSub = null;   // null | 'shop' | 'achievements'
+let shopPet = 'pulu';
 let editingCat = null;
 let tab = 'entry';
 let entryKind = 'expense'; // expense | income | transfer
@@ -116,6 +122,10 @@ async function reload() {
   budgets = (await store.getKV('budgets')) || { total: 0, pets: {} };
   if (!budgets.pets) budgets.pets = {};
   hasPin = !!(await store.getKV('pinHash'));
+  coins = (await store.getKV('coins')) || 0;
+  owned = (await store.getKV('owned')) || [];
+  equipped = (await store.getKV('equipped')) || {};
+  achieved = (await store.getKV('achieved')) || [];
 }
 
 /* ================= entry ================= */
@@ -377,11 +387,13 @@ async function saveTx(catId) {
   if (pay && pay.type === 'easycard' && (balances[pay.id] || 0) < 100) {
     balWarn = `（悠遊卡只剩 ${fmt(balances[pay.id] || 0)}，該加值囉！）`;
   }
+  const coinMsg = await awardRecordCoins();
+  await checkAchievements();
   const now = new Date();
   const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
   const line = feedLine(pet.id, { n: catCount(mt, catId), cat: cat.name, amt: fmt(amt) });
   resetEntry();
-  showToast(`${pet.name}：${line}${balWarn}`, pet.color);
+  showToast(`${pet.name}：${line}${balWarn}${coinMsg}`, pet.color);
 }
 
 async function saveIncome(incCatId) {
@@ -391,8 +403,10 @@ async function saveIncome(incCatId) {
   const acct = payments.find((p) => p.id === selectedPay);
   await store.put('tx', { id: store.uid(), kind: 'income', amount: amt, catId: incCatId, note: noteVal.trim(), ts: Date.now(), source: 'manual', payId: selectedPay });
   await reload();
+  const coinMsg = await awardRecordCoins();
+  await checkAchievements();
   resetEntry();
-  showToast(`💰 金金：收入 ${c.emo}${c.name} ${fmt(amt)} 入庫 ${acct ? acct.name : ''}，甚好甚好！`, '#EF9F27');
+  showToast(`💰 金金：收入 ${c.emo}${c.name} ${fmt(amt)} 入庫 ${acct ? acct.name : ''}，甚好甚好！${coinMsg}`, '#EF9F27');
 }
 
 async function saveTransfer(toId) {
@@ -450,9 +464,70 @@ async function resolvePending(id, confirmed) {
   }
 }
 
+/* ================= 金幣 / 成就 ================= */
+
+async function earnCoins(n) {
+  coins += n;
+  await store.setKV('coins', coins);
+}
+
+// 手動記帳給幣：每筆 + 每日首筆登入獎勵。回傳提示字串
+async function awardRecordCoins() {
+  let gained = COIN.perRecord;
+  const today = dateStr(new Date());
+  const lastDay = await store.getKV('lastCoinDay');
+  let bonus = false;
+  if (lastDay !== today) {
+    gained += COIN.dailyBonus;
+    bonus = true;
+    await store.setKV('lastCoinDay', today);
+  }
+  await earnCoins(gained);
+  return bonus ? `　🪙+${gained}（含每日獎勵）` : `　🪙+${gained}`;
+}
+
+async function checkAchievements() {
+  const now = new Date();
+  const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
+  const monthSpend = spendTotal(mt);
+  const stats = {
+    txCount: txs.length,
+    hasIncome: txs.some(isIncome),
+    hasInitBalance: payments.some((p) => p.tracked && (p.initBalance || 0) !== 0),
+    streak: streak(txs),
+    petsThisMonth: new Set(mt.filter(isSpend).map((t) => catById(t.catId).pet)).size,
+    underBudget: budgets.total > 0 && monthSpend <= budgets.total && monthSpend > 0,
+    netWorth: netWorth(payments, txs),
+    hasEquipped: Object.keys(equipped).length > 0
+  };
+  const newly = [];
+  for (const a of ACHIEVEMENTS) {
+    if (!achieved.includes(a.id) && a.check(stats)) {
+      achieved.push(a.id);
+      newly.push(a);
+    }
+  }
+  if (newly.length) {
+    const total = newly.reduce((s, a) => s + a.coin, 0);
+    await store.setKV('achieved', achieved);
+    await earnCoins(total);
+    const names = newly.map((a) => a.name).join('、');
+    setTimeout(() => showToast(`🏆 達成成就：${names}　🪙+${total}`, 'var(--gold)'), 1200);
+  }
+}
+
 /* ================= home ================= */
 
+function costumeOverlay(petId) {
+  const cid = equipped[petId];
+  if (!cid) return '';
+  const c = costumeById(cid);
+  return c ? `<span class="pet-hat">${c.emo}</span>` : '';
+}
+
 function renderHome() {
+  if (homeSub === 'shop') return renderShop();
+  if (homeSub === 'achievements') return renderAchievements();
   const now = new Date();
   const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
   const totals = petTotals(mt);
@@ -469,6 +544,7 @@ function renderHome() {
     const days = daysSinceFed(txs, p.id);
     const state = share >= 0.35 ? 'fat' : fedToday ? 'happy' : (days !== null && days > 7) ? 'sad' : 'idle';
     return `<div class="pet" data-pet="${p.id}" style="width:${w}px">
+      ${costumeOverlay(p.id)}
       <img src="img/pets/${p.id}_${state}.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
       <div class="pet-svg" style="display:none">${p.svg}</div>
     </div>`;
@@ -509,7 +585,15 @@ function renderHome() {
       ${rec.cardAdvice ? `<div class="rec-note">💡 ${rec.cardAdvice}</div>` : ''}
     </div>`;
 
+  const unclaimed = ACHIEVEMENTS.filter((a) => !achieved.includes(a.id)).length;
   view.innerHTML = `
+    <div class="coin-bar">
+      <div class="coin-amt">🪙 ${coins.toLocaleString('zh-TW')}</div>
+      <div class="coin-btns">
+        <button data-act="open-achievements">🏆 成就${unclaimed ? `<span class="badge-dot"></span>` : ''}</button>
+        <button data-act="open-shop">🛍️ 小舖</button>
+      </div>
+    </div>
     ${userName ? `<div class="home-title">${userName} 的怪獸小窩</div>` : ''}
     <div class="bubble"><span id="bubble-text"></span></div>
     <div class="scene">${petsHtml}</div>
@@ -524,6 +608,65 @@ function renderHome() {
 
   if (!monthTotal) setBubble('這個月還沒有帳目…記下第一筆，餵餵大家吧！', null);
   else petSpeak(king.id, false);
+}
+
+function renderShop() {
+  const pet = petById(shopPet);
+  const petPicker = PETS.map((p) =>
+    `<button class="shop-pet ${p.id === shopPet ? 'on' : ''}" data-shoppet="${p.id}" style="${p.id === shopPet ? 'border-color:' + p.color : ''}">
+      <span class="sp-emo">${{ pulu: '🔴', momo: '🟢', jin: '🟡', zhuan: '⬜', jo: '🩷' }[p.id]}</span>
+      <span class="sp-n">${p.name}</span></button>`).join('');
+  const eqId = equipped[shopPet];
+  const grid = COSTUMES.map((c) => {
+    const has = owned.includes(c.id);
+    const on = eqId === c.id;
+    let btn;
+    if (on) btn = `<button class="cos-btn on" data-unequip="${shopPet}">取下</button>`;
+    else if (has) btn = `<button class="cos-btn" data-equip="${c.id}">戴上</button>`;
+    else btn = `<button class="cos-btn buy ${coins < c.price ? 'no' : ''}" data-buy="${c.id}">🪙 ${c.price}</button>`;
+    return `<div class="cos-card ${on ? 'wearing' : ''}">
+      <div class="cos-emo">${c.emo}</div>
+      <div class="cos-name">${c.name}</div>
+      ${btn}
+    </div>`;
+  }).join('');
+
+  view.innerHTML = `
+    <div class="sub-head">
+      <button class="step-back" data-act="home-back">‹</button>
+      <div class="sub-title">🛍️ 裝扮小舖</div>
+      <div class="coin-amt">🪙 ${coins.toLocaleString('zh-TW')}</div>
+    </div>
+    <div class="dress-preview">
+      <div class="pet" style="width:150px">${costumeOverlay(shopPet)}
+        <img src="img/pets/${shopPet}_idle.png" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <div class="pet-svg" style="display:none">${pet.svg}</div>
+      </div>
+    </div>
+    <div class="shop-pets">${petPicker}</div>
+    <div class="cos-grid">${grid}</div>`;
+}
+
+function renderAchievements() {
+  const now = new Date();
+  const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
+  const rows = ACHIEVEMENTS.map((a) => {
+    const done = achieved.includes(a.id);
+    return `<div class="ach-row ${done ? 'done' : ''}">
+      <span class="ach-ico">${done ? '🏆' : '🔒'}</span>
+      <div class="mid"><div class="ach-n">${a.name}</div><div class="ach-d">${a.desc}</div></div>
+      <span class="ach-coin">🪙 ${a.coin}</span>
+    </div>`;
+  }).join('');
+  const doneN = achieved.length, totalN = ACHIEVEMENTS.length;
+  view.innerHTML = `
+    <div class="sub-head">
+      <button class="step-back" data-act="home-back">‹</button>
+      <div class="sub-title">🏆 成就任務</div>
+      <div class="coin-amt">🪙 ${coins.toLocaleString('zh-TW')}</div>
+    </div>
+    <div class="sub" style="margin:0 4px 12px">已完成 ${doneN} / ${totalN}，記帳解任務賺金幣去小舖買裝扮！</div>
+    <div class="card">${rows}</div>`;
 }
 
 function petSpeak(petId, wiggle = true) {
@@ -1200,6 +1343,7 @@ tabbar.addEventListener('click', (e) => {
   const prev = tab;
   tab = btn.dataset.tab;
   if (tab === 'ledger') { ledgerDate = new Date(); ledgerSearch = ''; ledgerSelDay = null; }
+  if (tab === 'home') homeSub = null;
   if (tab === 'entry' && prev !== 'entry') { entryStep = 1; entryKind = 'expense'; transferFrom = null; }
   render();
 });
@@ -1219,6 +1363,42 @@ view.addEventListener('click', async (e) => {
 
   const pet = e.target.closest('[data-pet]');
   if (pet) return petSpeak(pet.dataset.pet);
+
+  const shopPetBtn = e.target.closest('[data-shoppet]');
+  if (shopPetBtn) { shopPet = shopPetBtn.dataset.shoppet; return renderShop(); }
+
+  const buyBtn = e.target.closest('[data-buy]');
+  if (buyBtn) {
+    const c = costumeById(buyBtn.dataset.buy);
+    if (coins < c.price) { showToast(`金幣不夠（還差 🪙${c.price - coins}），多記帳賺一點！`); return; }
+    coins -= c.price;
+    owned.push(c.id);
+    equipped[shopPet] = c.id;
+    await store.setKV('coins', coins);
+    await store.setKV('owned', owned);
+    await store.setKV('equipped', equipped);
+    await checkAchievements();
+    renderShop();
+    showToast(`🎉 買下 ${c.emo}${c.name}，已幫 ${petById(shopPet).name} 戴上！`);
+    return;
+  }
+
+  const equipBtn = e.target.closest('[data-equip]');
+  if (equipBtn) {
+    equipped[shopPet] = equipBtn.dataset.equip;
+    await store.setKV('equipped', equipped);
+    await checkAchievements();
+    renderShop();
+    return;
+  }
+
+  const unequipBtn = e.target.closest('[data-unequip]');
+  if (unequipBtn) {
+    delete equipped[unequipBtn.dataset.unequip];
+    await store.setKV('equipped', equipped);
+    renderShop();
+    return;
+  }
 
   const kindBtn = e.target.closest('[data-kind]');
   if (kindBtn) {
@@ -1374,6 +1554,9 @@ view.addEventListener('click', async (e) => {
     entryStep = Number(act.dataset.to) || 1;
     return renderEntry();
   }
+  if (a === 'open-shop') { homeSub = 'shop'; return renderShop(); }
+  if (a === 'open-achievements') { homeSub = 'achievements'; return renderAchievements(); }
+  if (a === 'home-back') { homeSub = null; return renderHome(); }
   if (a === 'add-rec') return addRec();
   if (a === 'add-cat') return addCat();
   if (a === 'save-cat') return saveCatEdit();
@@ -1572,6 +1755,7 @@ async function boot() {
     const names = [...new Set(newTxs.map((t) => t.note))].join('、');
     showToast(`🔁 定期開支已自動入帳：${names}`);
   }
+  await checkAchievements();   // 補發既有進度達成的成就
   render();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

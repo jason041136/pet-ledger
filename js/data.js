@@ -173,6 +173,41 @@ export const INCOME_CATS = [
 export const incomeCatById = (id) =>
   INCOME_CATS.find((c) => c.id === id) || { id, name: '其他收入', emo: '🪙' };
 
+/* ===== 金幣經濟 ===== */
+export const COIN = {
+  perRecord: 3,       // 每筆手動記帳
+  dailyBonus: 15      // 每天第一筆的登入獎勵
+};
+
+/* 怪獸裝扮（emoji 配件，戴在頭上）。之後可換成精緻美術。 */
+export const COSTUMES = [
+  { id: 'bow', emo: '🎀', name: '蝴蝶結', price: 50 },
+  { id: 'flower', emo: '🌸', name: '小花', price: 50 },
+  { id: 'cap', emo: '🧢', name: '棒球帽', price: 90 },
+  { id: 'grad', emo: '🎓', name: '學士帽', price: 120 },
+  { id: 'tophat', emo: '🎩', name: '紳士帽', price: 160 },
+  { id: 'party', emo: '🥳', name: '派對帽', price: 110 },
+  { id: 'sunglasses', emo: '🕶️', name: '墨鏡', price: 130 },
+  { id: 'halo', emo: '😇', name: '光環', price: 200 },
+  { id: 'crown', emo: '👑', name: '皇冠', price: 300 },
+  { id: 'star', emo: '⭐', name: '閃星', price: 80 }
+];
+export const costumeById = (id) => COSTUMES.find((c) => c.id === id);
+
+/* 成就任務。check 收到即時統計，達成一次自動發金幣。 */
+export const ACHIEVEMENTS = [
+  { id: 'first', name: '記帳新手', desc: '記下第一筆帳', coin: 50, check: (s) => s.txCount >= 1 },
+  { id: 'income1', name: '開始賺錢', desc: '記錄第一筆收入', coin: 30, check: (s) => s.hasIncome },
+  { id: 'accounts', name: '理財起步', desc: '設定帳戶起始餘額', coin: 40, check: (s) => s.hasInitBalance },
+  { id: 'streak3', name: '三日不間斷', desc: '連續記帳 3 天', coin: 40, check: (s) => s.streak >= 3 },
+  { id: 'streak7', name: '一週達成', desc: '連續記帳 7 天', coin: 120, check: (s) => s.streak >= 7 },
+  { id: 'streak30', name: '記帳達人', desc: '連續記帳 30 天', coin: 500, check: (s) => s.streak >= 30 },
+  { id: 'allpets', name: '雨露均霑', desc: '一個月餵到全部 5 隻怪獸', coin: 100, check: (s) => s.petsThisMonth >= 5 },
+  { id: 'budget', name: '守住預算', desc: '設定總預算且當月不超支', coin: 150, check: (s) => s.underBudget },
+  { id: 'rich', name: '小富翁', desc: '淨資產突破 10 萬', coin: 200, check: (s) => s.netWorth >= 100000 },
+  { id: 'dresser', name: '時尚教主', desc: '幫怪獸戴上第一件裝扮', coin: 60, check: (s) => s.hasEquipped }
+];
+
 /* 台新 Richart 卡權益（2026/7/1～2027/3/31，每日可在 Richart Life APP 切換一次，預設天天刷） */
 export const RICHART_PLANS = {
   chill: { name: 'Chill刷', pct: '最高10%', desc: '火鍋燒肉、追星串流、運動保健指定品牌' },
