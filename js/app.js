@@ -1,11 +1,12 @@
 import * as store from './db.js';
-import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, INCOME_CATS, incomeCatById, ACCOUNT_TYPES, COIN, COSTUMES, costumeById, ACHIEVEMENTS, isCard, isAsset, setCats, petById, catById } from './data.js';
+import { PETS, CATS, DEFAULT_CATS, DEFAULT_PAYMENTS, INCOME_CATS, DEFAULT_INCOME_CATS, setIncomeCats, incomeCatById, ACCOUNT_TYPES, COIN, COSTUMES, costumeById, ACHIEVEMENTS, isCard, isAsset, setCats, petById, catById } from './data.js';
 import { fmt, dateStr, monthTxs, petTotals, spendTotal, incomeTotal, isSpend, isIncome, isTransfer, txKind, accountBalances, netWorth, assetTotal, cardDebtTotal, recommendPlan, catCount, daysSinceFed, streak, feedLine, idleLine, initNextDue, postDue } from './engine.js';
 import { doSync } from './sync.js';
 
 let txs = [];
 let recurring = [];
 let cats = [];
+let incats = [];
 let payments = [];
 let balances = {};
 let selectedPay = 'cash';
@@ -22,6 +23,7 @@ let achieved = [];
 let homeSub = null;   // null | 'shop' | 'achievements'
 let shopPet = 'pulu';
 let editingCat = null;
+let editingInc = null;
 let tab = 'entry';
 let entryKind = 'expense'; // expense | income | transfer
 let amount = '';
@@ -51,6 +53,13 @@ function applyTheme(t) {
   theme = t;
   if (t === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
+}
+
+// 讓頁內導覽（步驟切換、開小舖、換模式）也觸發錯落淡入
+function animateSwap() {
+  view.classList.remove('anim');
+  void view.offsetWidth;
+  view.classList.add('anim');
 }
 
 async function sha256(s) {
@@ -107,6 +116,8 @@ async function reload() {
   recurring = await store.getAll('recurring');
   cats = (await store.getAll('cats')).sort((a, b) => (a.order || 0) - (b.order || 0));
   setCats(cats);
+  incats = (await store.getAll('inccats')).sort((a, b) => (a.order || 0) - (b.order || 0));
+  setIncomeCats(incats);
   txs.sort((a, b) => b.ts - a.ts);
   payments = (await store.getAll('payments')).sort((a, b) => (a.order || 0) - (b.order || 0));
   balances = accountBalances(payments, txs);
@@ -812,7 +823,7 @@ function txRowHtml(t) {
   if (kind === 'transfer') {
     const from = payments.find((x) => x.id === t.fromPay);
     const to = payments.find((x) => x.id === (t.toPay != null ? t.toPay : t.payId));
-    return `<div class="tx-row transfer-row">
+    return `<div class="tx-row transfer-row" data-txid="${t.id}">
       <span class="emo">🔄</span>
       <div class="mid"><div class="cat">轉帳</div>
         <div class="note">${from ? from.name : '?'} → ${to ? to.name : '?'}${t.note && t.note !== '悠遊卡加值' ? ' · ' + t.note : ''}</div></div>
@@ -823,7 +834,7 @@ function txRowHtml(t) {
   if (kind === 'income') {
     const c = incomeCatById(t.catId);
     const acct = payments.find((x) => x.id === t.payId);
-    return `<div class="tx-row income-row">
+    return `<div class="tx-row income-row" data-txid="${t.id}">
       <span class="emo">${c.emo}</span>
       <div class="mid"><div class="cat">${c.name}${acct ? ` <span class="paytag">${acct.emo}${acct.name}</span>` : ''}</div>
         ${t.note ? `<div class="note">${t.note}</div>` : ''}</div>
@@ -835,7 +846,7 @@ function txRowHtml(t) {
   const payTag = pay ? ` <span class="paytag">${pay.emo}${pay.name}</span>` : '';
   const c = catById(t.catId);
   const p = petById(c.pet);
-  return `<div class="tx-row">
+  return `<div class="tx-row" data-txid="${t.id}">
     <span class="emo">${c.emo}</span>
     <div class="mid">
       <div class="cat">${c.name}${t.source === 'recurring' ? ' 🔁' : ''}${payTag}</div>
@@ -844,6 +855,99 @@ function txRowHtml(t) {
     <span class="amt" style="color:${p.deep}">−${fmt(t.amount)}</span>
     <button class="del" data-del="${t.id}">✕</button>
   </div>`;
+}
+
+/* ===== 帳目編輯（底部面板） ===== */
+
+function openEditSheet(txId) {
+  const t = txs.find((x) => x.id === txId);
+  if (!t) return;
+  const kind = txKind(t);
+  const d = new Date(t.ts);
+  const dateVal = dateStr(d);
+
+  let catField = '';
+  if (kind === 'expense') {
+    const opts = cats.map((c) => `<option value="${c.id}" ${c.id === t.catId ? 'selected' : ''}>${c.emo} ${c.name}（${petById(c.pet).name}）</option>`).join('');
+    catField = `<label>分類</label><select id="es-cat">${opts}</select>`;
+  } else if (kind === 'income') {
+    const opts = incats.map((c) => `<option value="${c.id}" ${c.id === t.catId ? 'selected' : ''}>${c.emo} ${c.name}</option>`).join('');
+    catField = `<label>收入分類</label><select id="es-cat">${opts}</select>`;
+  }
+
+  let payField = '';
+  if (kind === 'expense') {
+    const opts = payments.map((p) => `<option value="${p.id}" ${p.id === t.payId ? 'selected' : ''}>${p.emo} ${p.name}</option>`).join('');
+    payField = `<label>支付方式</label><select id="es-pay">${opts}</select>`;
+  } else if (kind === 'income') {
+    const opts = payments.filter(isAsset).map((p) => `<option value="${p.id}" ${p.id === t.payId ? 'selected' : ''}>${p.emo} ${p.name}</option>`).join('');
+    payField = `<label>存入帳戶</label><select id="es-pay">${opts}</select>`;
+  } else {
+    const fromOpts = payments.filter(isAsset).map((p) => `<option value="${p.id}" ${p.id === t.fromPay ? 'selected' : ''}>${p.emo} ${p.name}</option>`).join('');
+    const toOpts = payments.filter((p) => p.tracked).map((p) => `<option value="${p.id}" ${p.id === (t.toPay != null ? t.toPay : t.payId) ? 'selected' : ''}>${p.emo} ${p.name}</option>`).join('');
+    payField = `<label>轉出</label><select id="es-from">${fromOpts}</select>
+      <label>轉入</label><select id="es-to">${toOpts}</select>`;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.id = 'edit-sheet-wrap';
+  wrap.innerHTML = `
+    <div class="sheet-back" data-es="cancel"></div>
+    <div class="edit-sheet">
+      <div class="es-title">✏️ 編輯帳目</div>
+      <label>金額</label>
+      <input id="es-amount" type="number" inputmode="decimal" value="${t.amount}">
+      ${catField}
+      ${payField}
+      <label>日期</label>
+      <input id="es-date" type="date" value="${dateVal}">
+      <label>備註</label>
+      <input id="es-note" value="${(t.note || '').replace(/"/g, '&quot;')}" placeholder="補個備註吧">
+      <div class="es-btns">
+        <button class="btn ghost" data-es="cancel">取消</button>
+        <button class="btn" data-es="save" data-id="${t.id}">儲存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add('show'));
+
+  wrap.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-es]');
+    if (!b) return;
+    if (b.dataset.es === 'cancel') { closeEditSheet(); return; }
+    // 儲存
+    const amt = Number(document.getElementById('es-amount').value);
+    if (!amt || amt <= 0) { showToast('金額不對喔'); return; }
+    t.amount = amt;
+    t.note = document.getElementById('es-note').value.trim();
+    const nd = document.getElementById('es-date').value;
+    if (nd) {
+      const old = new Date(t.ts);
+      t.ts = new Date(nd + 'T' + String(old.getHours()).padStart(2, '0') + ':' + String(old.getMinutes()).padStart(2, '0') + ':00').getTime();
+    }
+    if (kind === 'transfer') {
+      t.fromPay = document.getElementById('es-from').value;
+      t.toPay = document.getElementById('es-to').value;
+    } else {
+      t.catId = document.getElementById('es-cat').value;
+      t.payId = document.getElementById('es-pay').value;
+    }
+    await store.put('tx', t);
+    const dirty = (await store.getKV('dirtyTx')) || [];
+    if (!dirty.includes(t.id)) dirty.push(t.id);
+    await store.setKV('dirtyTx', dirty);
+    await reload();
+    closeEditSheet();
+    render();
+    showToast('✏️ 已更新帳目');
+  });
+}
+
+function closeEditSheet() {
+  const w = document.getElementById('edit-sheet-wrap');
+  if (!w) return;
+  w.classList.remove('show');
+  setTimeout(() => w.remove(), 250);
 }
 
 function ledgerRows(list) {
@@ -1097,15 +1201,18 @@ function renderSettings() {
           <button class="chip" data-act="cancel-cat">取消</button>
         </div>`;
       }
-      return `<div class="rec-row">
+      return `<div class="rec-row" data-catrow="${c.id}">
+        <span class="drag-handle" data-drag="${c.id}">⠿</span>
         <span class="emo">${c.emo}</span>
         <div class="mid"><div class="name">${c.name}</div></div>
         <button class="del" data-editcat="${c.id}">✎</button>
         <button class="del" data-delcat="${c.id}">✕</button>
       </div>`;
     }).join('');
-    if (!rows) return '';
-    return `<div class="pet-tag" style="margin-top:10px"><span class="dot" style="background:${p.color}"></span>${p.name}（${p.title}）</div>${rows}`;
+    return `<div data-catgroup="${p.id}">
+      <div class="pet-tag" style="margin-top:10px"><span class="dot" style="background:${p.color}"></span>${p.name}（${p.title}）</div>
+      ${rows || '<div class="sub group-empty">拖分類到這裡</div>'}
+    </div>`;
   }).join('');
 
   const lastSyncText = syncCfg.url
@@ -1180,7 +1287,7 @@ function renderSettings() {
       </div>
     </div>
 
-    <h2>分類管理</h2>
+    <h2>支出分類（⠿ 可拖拉排序、拖到別隻怪獸底下）</h2>
     <div class="card">${catRows}</div>
     <div class="card">
       <div class="sub">新增自訂分類</div>
@@ -1190,6 +1297,34 @@ function renderSettings() {
         <select id="cat-pet" class="full">${petOpts}</select>
       </div>
       <button class="btn" data-act="add-cat">新增分類</button>
+    </div>
+
+    <h2>收入分類</h2>
+    <div class="card">
+      ${incats.map((c) => {
+        if (c.id === editingInc) {
+          return `<div class="rec-row" style="flex-wrap:wrap;gap:6px">
+            <input id="einc-emo" value="${c.emo}" maxlength="4" style="width:56px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;color:var(--text)">
+            <input id="einc-name" value="${c.name}" style="flex:1;min-width:90px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;color:var(--text);font-family:inherit">
+            <button class="chip" data-act="save-inc">✔ 儲存</button>
+            <button class="chip" data-act="cancel-inc">取消</button>
+          </div>`;
+        }
+        return `<div class="rec-row">
+          <span class="emo">${c.emo}</span>
+          <div class="mid"><div class="name">${c.name}</div></div>
+          <button class="del" data-editinc="${c.id}">✎</button>
+          <button class="del" data-delinc="${c.id}">✕</button>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="card">
+      <div class="sub">新增收入分類</div>
+      <div class="form-grid">
+        <input id="inc-emo" placeholder="圖示（emoji）" maxlength="4" autocomplete="off">
+        <input id="inc-name" placeholder="分類名稱（例如 股息）" autocomplete="off">
+      </div>
+      <button class="btn" data-act="add-inc">新增</button>
     </div>
 
     <h2>資料</h2>
@@ -1262,7 +1397,7 @@ async function delCat(id) {
 }
 
 function exportData() {
-  const payload = { app: 'pet-ledger', user: userName, exportedAt: new Date().toISOString(), txs, recurring, cats, payments, theme };
+  const payload = { app: 'pet-ledger', user: userName, exportedAt: new Date().toISOString(), txs, recurring, cats, incats, payments, theme };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1313,6 +1448,7 @@ async function importData(e) {
     for (const t of data.txs) await store.put('tx', t);
     for (const r of data.recurring || []) await store.put('recurring', r);
     for (const c of data.cats || []) await store.put('cats', c);
+    for (const c of data.incats || []) await store.put('inccats', c);
     for (const p of data.payments || []) await store.put('payments', p);
     await reload();
     renderSettings();
@@ -1321,6 +1457,83 @@ async function importData(e) {
     showToast('匯入失敗：這不是有效的備份檔');
   }
   e.target.value = '';
+}
+
+/* ===== 分類拖拉排序（pointer events，支援觸控） ===== */
+
+let dragCat = null;
+
+view.addEventListener('pointerdown', (e) => {
+  const h = e.target.closest('.drag-handle');
+  if (!h) return;
+  e.preventDefault();
+  const row = h.closest('[data-catrow]');
+  if (!row) return;
+  dragCat = { id: row.dataset.catrow, row, startY: e.clientY, over: null };
+  row.classList.add('dragging');
+  document.addEventListener('pointermove', onCatDragMove);
+  document.addEventListener('pointerup', onCatDragEnd, { once: true });
+});
+
+function onCatDragMove(e) {
+  if (!dragCat) return;
+  e.preventDefault();
+  dragCat.row.style.transform = `translateY(${e.clientY - dragCat.startY}px) scale(1.02)`;
+  dragCat.row.style.pointerEvents = 'none';
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  dragCat.row.style.pointerEvents = '';
+  document.querySelectorAll('.drop-hint, .group-hint').forEach((n) => n.classList.remove('drop-hint', 'group-hint'));
+  const overRow = el ? el.closest('[data-catrow]') : null;
+  const overGroup = el ? el.closest('[data-catgroup]') : null;
+  if (overRow && overRow !== dragCat.row) {
+    overRow.classList.add('drop-hint');
+    dragCat.over = { type: 'row', id: overRow.dataset.catrow };
+  } else if (overGroup) {
+    overGroup.classList.add('group-hint');
+    dragCat.over = { type: 'group', pet: overGroup.dataset.catgroup };
+  } else {
+    dragCat.over = null;
+  }
+}
+
+async function onCatDragEnd() {
+  document.removeEventListener('pointermove', onCatDragMove);
+  if (!dragCat) return;
+  const { id, row, over } = dragCat;
+  dragCat = null;
+  row.classList.remove('dragging');
+  row.style.transform = '';
+  document.querySelectorAll('.drop-hint, .group-hint').forEach((n) => n.classList.remove('drop-hint', 'group-hint'));
+  if (!over) return;
+
+  const dragged = cats.find((c) => c.id === id);
+  if (!dragged) return;
+  // 建出各組目前顯示順序
+  const groups = {};
+  for (const p of PETS) groups[p.id] = cats.filter((c) => c.pet === p.id && c.id !== id).map((c) => c.id);
+  let targetPet, insertAt;
+  if (over.type === 'row') {
+    const target = cats.find((c) => c.id === over.id);
+    targetPet = target.pet;
+    insertAt = groups[targetPet].indexOf(over.id);   // 插在目標列前面
+  } else {
+    targetPet = over.pet;
+    insertAt = groups[targetPet].length;             // 丟進組尾
+  }
+  groups[targetPet].splice(insertAt, 0, id);
+  // 依新順序重寫 order 與 pet
+  const moved = dragged.pet !== targetPet;
+  for (const petId of Object.keys(groups)) {
+    for (let i = 0; i < groups[petId].length; i++) {
+      const c = cats.find((x) => x.id === groups[petId][i]);
+      if (c.order !== i || c.pet !== petId) {
+        await store.put('cats', { ...c, order: i, pet: petId });
+      }
+    }
+  }
+  await reload();
+  renderSettings();
+  if (moved) showToast(`${dragged.emo} ${dragged.name} 改餵${petById(targetPet).name}了`);
 }
 
 /* ================= router & events ================= */
@@ -1406,6 +1619,7 @@ view.addEventListener('click', async (e) => {
     entryStep = 1;
     transferFrom = null;
     noteVal = document.getElementById('note')?.value || noteVal;
+    animateSwap();
     renderEntry();
     return;
   }
@@ -1497,6 +1711,24 @@ view.addEventListener('click', async (e) => {
     return;
   }
 
+  const editinc = e.target.closest('[data-editinc]');
+  if (editinc) {
+    editingInc = editinc.dataset.editinc;
+    renderSettings();
+    return;
+  }
+
+  const delinc = e.target.closest('[data-delinc]');
+  if (delinc) {
+    const c = incats.find((x) => x.id === delinc.dataset.delinc);
+    if (confirm(`刪除收入分類「${c.name}」？（已記的帳會保留顯示）`)) {
+      await store.del('inccats', c.id);
+      await reload();
+      renderSettings();
+    }
+    return;
+  }
+
   const delcat = e.target.closest('[data-delcat]');
   if (delcat) return delCat(delcat.dataset.delcat);
 
@@ -1514,6 +1746,10 @@ view.addEventListener('click', async (e) => {
   if (pendNo) return resolvePending(pendNo.dataset.pendNo, false);
 
   const del = e.target.closest('[data-del]');
+  if (!del) {
+    const txRow = e.target.closest('[data-txid]');
+    if (txRow) return openEditSheet(txRow.dataset.txid);
+  }
   if (del) {
     if (confirm('刪除這筆帳目？')) {
       await store.del('tx', del.dataset.del);
@@ -1548,20 +1784,49 @@ view.addEventListener('click', async (e) => {
     amount = String(v);            // 運算式求值後變純數字
     noteVal = document.getElementById('note')?.value || '';
     entryStep = 2;
+    animateSwap();
     return renderEntry();
   }
   if (a === 'back-step') {
     entryStep = Number(act.dataset.to) || 1;
+    animateSwap();
     return renderEntry();
   }
-  if (a === 'open-shop') { homeSub = 'shop'; return renderShop(); }
-  if (a === 'open-achievements') { homeSub = 'achievements'; return renderAchievements(); }
-  if (a === 'home-back') { homeSub = null; return renderHome(); }
+  if (a === 'open-shop') { homeSub = 'shop'; animateSwap(); return renderShop(); }
+  if (a === 'open-achievements') { homeSub = 'achievements'; animateSwap(); return renderAchievements(); }
+  if (a === 'home-back') { homeSub = null; animateSwap(); return renderHome(); }
   if (a === 'add-rec') return addRec();
   if (a === 'add-cat') return addCat();
   if (a === 'save-cat') return saveCatEdit();
   if (a === 'cancel-cat') {
     editingCat = null;
+    return renderSettings();
+  }
+  if (a === 'add-inc') {
+    const name = document.getElementById('inc-name').value.trim();
+    const emo = document.getElementById('inc-emo').value.trim() || '🪙';
+    if (!name) { showToast('分類名稱要填喔'); return; }
+    const order = Math.max(0, ...incats.map((c) => c.order || 0)) + 1;
+    await store.put('inccats', { id: 'inc_' + store.uid().slice(0, 8), name, emo, order });
+    await reload();
+    renderSettings();
+    showToast(`已新增收入分類：${emo} ${name}`);
+    return;
+  }
+  if (a === 'save-inc') {
+    const c = incats.find((x) => x.id === editingInc);
+    if (c) {
+      const name = document.getElementById('einc-name').value.trim() || c.name;
+      const emo = document.getElementById('einc-emo').value.trim() || c.emo;
+      await store.put('inccats', { ...c, name, emo });
+    }
+    editingInc = null;
+    await reload();
+    renderSettings();
+    return;
+  }
+  if (a === 'cancel-inc') {
+    editingInc = null;
     return renderSettings();
   }
   if (a === 'topup') return topupEasycard();
@@ -1633,11 +1898,11 @@ view.addEventListener('click', async (e) => {
   if (a === 'export') return exportData();
   if (a === 'export-csv') return exportCSV();
   if (a === 'import') return document.getElementById('import-file').click();
-  if (a === 'mode-list') { ledgerMode = 'list'; return renderLedger(); }
-  if (a === 'mode-calendar') { ledgerMode = 'calendar'; return renderLedger(); }
-  if (a === 'mode-stats') { ledgerMode = 'stats'; return renderLedger(); }
-  if (a === 'period-month') { statsPeriod = 'month'; return renderLedger(); }
-  if (a === 'period-year') { statsPeriod = 'year'; return renderLedger(); }
+  if (a === 'mode-list') { ledgerMode = 'list'; animateSwap(); return renderLedger(); }
+  if (a === 'mode-calendar') { ledgerMode = 'calendar'; animateSwap(); return renderLedger(); }
+  if (a === 'mode-stats') { ledgerMode = 'stats'; animateSwap(); return renderLedger(); }
+  if (a === 'period-month') { statsPeriod = 'month'; animateSwap(); return renderLedger(); }
+  if (a === 'period-year') { statsPeriod = 'year'; animateSwap(); return renderLedger(); }
   if (a === 'clear-search') { ledgerSearch = ''; return renderLedger(); }
   if (a === 'prev-month') { ledgerDate.setMonth(ledgerDate.getMonth() - 1); ledgerSelDay = null; return renderLedger(); }
   if (a === 'next-month') { ledgerDate.setMonth(ledgerDate.getMonth() + 1); ledgerSelDay = null; return renderLedger(); }
@@ -1663,6 +1928,11 @@ async function boot() {
   const existingPay = await store.getAll('payments');
   if (!existingPay.length) {
     for (const p of DEFAULT_PAYMENTS) await store.put('payments', p);
+  }
+  const existingInc = await store.getAll('inccats');
+  if (!existingInc.length) {
+    let j = 0;
+    for (const c of DEFAULT_INCOME_CATS) await store.put('inccats', { ...c, order: j++ });
   }
 
   // 一次性補種：新版預設分類（咖啡/治裝/3C/醫療…）加到既有資料庫

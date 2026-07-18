@@ -8,13 +8,15 @@ export async function doSync() {
   const txs = await store.getAll('tx');
   const tombstones = (await store.getKV('tombstones')) || [];
   const pendingResolved = (await store.getKV('pendingResolved')) || [];
+  const dirtyIds = (await store.getKV('dirtyTx')) || [];
+  const updates = txs.filter((t) => dirtyIds.includes(t.id));   // 本機編輯過、要覆蓋雲端的
 
   let data;
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ token, action: 'sync', txs, tombstones, pendingResolved })
+      body: JSON.stringify({ token, action: 'sync', txs, updates, tombstones, pendingResolved })
     });
     data = await res.json();
   } catch {
@@ -37,6 +39,7 @@ export async function doSync() {
   }
   for (const id of data.deletedIds || []) await store.del('tx', id);
   await store.setKV('tombstones', []);
+  await store.setKV('dirtyTx', []);
   await store.setKV('pendingResolved', []);
   await store.setKV('pending', data.pending || []);
   await store.setKV('lastSync', Date.now());

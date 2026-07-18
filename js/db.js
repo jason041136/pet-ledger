@@ -1,5 +1,5 @@
 const NAME = 'pet-ledger';
-const VERSION = 3;
+const VERSION = 4;
 let _db = null;
 
 function open() {
@@ -12,6 +12,7 @@ function open() {
       if (!db.objectStoreNames.contains('cats')) db.createObjectStore('cats', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv', { keyPath: 'k' });
       if (!db.objectStoreNames.contains('payments')) db.createObjectStore('payments', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('inccats')) db.createObjectStore('inccats', { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

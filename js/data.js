@@ -159,8 +159,8 @@ export const ACCOUNT_TYPES = [
 export const isCard = (a) => a && a.type === 'card';
 export const isAsset = (a) => a && a.tracked && a.type !== 'card';
 
-/* 收入分類（餵金金——收入越多金金越開心） */
-export const INCOME_CATS = [
+/* 收入分類（可自訂，存在 DB inccats） */
+export const DEFAULT_INCOME_CATS = [
   { id: 'salary', name: '薪水', emo: '💼' },
   { id: 'bonus', name: '獎金', emo: '🎯' },
   { id: 'redpack', name: '紅包禮金', emo: '🧧' },
@@ -170,8 +170,13 @@ export const INCOME_CATS = [
   { id: 'income_other', name: '其他收入', emo: '🪙' }
 ];
 
+export let INCOME_CATS = [...DEFAULT_INCOME_CATS];
+export function setIncomeCats(list) { INCOME_CATS = list; }
+
 export const incomeCatById = (id) =>
-  INCOME_CATS.find((c) => c.id === id) || { id, name: '其他收入', emo: '🪙' };
+  INCOME_CATS.find((c) => c.id === id) ||
+  DEFAULT_INCOME_CATS.find((c) => c.id === id) ||
+  { id, name: '其他收入', emo: '🪙' };
 
 /* ===== 金幣經濟 ===== */
 export const COIN = {

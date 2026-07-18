@@ -102,6 +102,14 @@ function sync(body) {
     for (let i = 1; i < fresh.length; i++) rowById[String(fresh[i][0])] = i + 1;
   }
 
+  // 更新：本機編輯過的帳目，覆蓋雲端該列
+  (body.updates || []).forEach(function (t) {
+    var row = rowById[String(t.id)];
+    if (row) {
+      sh.getRange(row, 1, 1, 11).setValues([[String(t.id), Number(t.ts), Number(t.amount), String(t.catId || ''), String(t.note || ''), String(t.source || 'manual'), '', String(t.payId || ''), String(t.kind || 'expense'), String(t.fromPay || ''), String(t.toPay || '')]]);
+    }
+  });
+
   // 刪除（軟刪除，打上 deleted 標記）
   (body.tombstones || []).forEach(function (id) {
     if (rowById[String(id)]) sh.getRange(rowById[String(id)], 7).setValue(1);
