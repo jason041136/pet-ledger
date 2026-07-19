@@ -34,9 +34,9 @@
 
 ## 資料模型速記
 
-- **tx**：`{id, kind:'expense'|'income'|'transfer', amount, catId, note, ts, source:'manual'|'recurring'|'email'|'topup', payId, fromPay, toPay}`（舊資料無 kind＝expense）
+- **tx**：`{id, kind:'expense'|'income'|'transfer', amount, catId, note, ts, source:'manual'|'recurring'|'email'|'topup'|'carrier', payId, fromPay, toPay}`（舊資料無 kind＝expense；carrier＝載具發票匯入，帳本顯示 🧾）
 - **payments（帳戶）**：`{id, name, emo, type:'cash'|'bank'|'easycard'|'invest'|'card', tracked, initBalance, order}`。信用卡負餘額＝待繳；淨資產＝資產−卡債。餘額永遠即時計算不累加存
-- **kv 重要鍵**：syncUrl/syncToken/lastSync、pending/pendingResolved（email 待確認）、tombstones/dirtyTx（同步刪除/編輯）、budgets{total,pets{}}、coins/owned/equipped/achieved/lastCoinDay、pinHash（SHA-256 密碼鎖）、userName、theme、lastPay
+- **kv 重要鍵**：syncUrl/syncToken/lastSync、pending/pendingResolved（email 待確認）、tombstones/dirtyTx（同步刪除/編輯）、budgets{total,pets{}}、coins/owned/equipped/achieved/lastCoinDay、pinHash（SHA-256 密碼鎖）、userName、theme、lastPay、carrierInv（已匯入的發票號碼，防重複匯入）
 - **怪獸系統**：分類掛 pet → 支出餵怪獸；體型=當月佔比；狀態 fat(≥35%)/happy(今天餵過)/sad(>7天)/idle；收入/轉帳不影響怪獸
 
 ## 使用者背景（做決策要考慮）
@@ -60,7 +60,7 @@
 
 ## 未來藍圖（使用者已認可的方向）
 
-1. **載具**：使用者申請財政部電子發票 AppID 中 → 到手後在 Code.gs 加 carrierInvChk/carrierInvDetail 拉手機條碼載具發票明細（驗證碼存 Apps Script 不進 repo）；備案＝掃發票 QR
+1. ~~載具 API~~ **已做完（改走 CSV 匯入）**：財政部 2025 修法後個人無法申請 API（要 ISO27001，企業限定）。改為每月到電子發票平台「發票查詢及捐贈」勾選→下載CSV檔→App 設定頁「載具發票匯入」。app.js 有 parseCarrierCSV（一列一品項、品名在最後欄）、CARRIER_ALIAS 品牌簡稱、CARRIER_RULES 分類猜測、同日同額疑似重複偵測、kv carrierInv 擋重複匯入。使用者手機條碼 /6SUCUWR。遠期備案＝掃紙本發票 QR
 2. **家具佈置小窩**：依分類記帳量解鎖對應風格家具（金金→金碧輝煌…風格再議：包豪斯/日雜感）
 3. **輕社交**：匿名排行榜、好友互看怪獸（不露金額）→ 驗證需求後才考慮廣場即時聊天（需真後端+帳號+審核）
 4. 裝扮內購變現（遠期）

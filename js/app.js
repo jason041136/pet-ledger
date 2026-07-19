@@ -35,6 +35,7 @@ let ledgerMode = 'list';
 let ledgerSearch = '';
 let ledgerSelDay = null;
 let statsPeriod = 'month';   // month | year
+let carrierReview = null;    // 載具 CSV 解析結果（待確認清單）
 
 const view = document.getElementById('view');
 const tabbar = document.getElementById('tabbar');
@@ -849,7 +850,7 @@ function txRowHtml(t) {
   return `<div class="tx-row" data-txid="${t.id}">
     <span class="emo">${c.emo}</span>
     <div class="mid">
-      <div class="cat">${c.name}${t.source === 'recurring' ? ' 🔁' : ''}${payTag}</div>
+      <div class="cat">${c.name}${t.source === 'recurring' ? ' 🔁' : ''}${t.source === 'carrier' ? ' 🧾' : ''}${payTag}</div>
       ${t.note ? `<div class="note">${t.note}</div>` : ''}
     </div>
     <span class="amt" style="color:${p.deep}">−${fmt(t.amount)}</span>
@@ -1166,6 +1167,168 @@ async function addAccount() {
 
 /* ================= settings ================= */
 
+/* ===== 載具發票匯入（財政部平台 CSV） ===== */
+
+// 賣方名稱 → 顯示用簡稱（先比對品牌別名，否則去掉公司字尾）
+const CARRIER_ALIAS = [
+  [/安心食品/, '摩斯漢堡'], [/和雲行動/, 'iRent'], [/台灣中油|中油股份/, '中油'],
+  [/統一超商/, '7-11'], [/全家便利/, '全家'], [/悠遊卡股份/, '悠遊卡'],
+  [/Apple Distribution/i, 'Apple'], [/富利餐飲/, '肯德基'], [/和德昌/, '麥當勞'],
+  [/國興資訊|路易莎/, '路易莎'], [/統一星巴克|悠旅生活/, '星巴克'],
+];
+
+// 賣方/品名關鍵字 → 分類猜測（由上往下第一個命中）
+const CARRIER_RULES = [
+  [/中油|加油|台亞石油|全國加油|和雲|iRent|和運|格上|停車|嘟嘟房|捷運|台鐵|高鐵|客運|計程車|Uber/i, 'transport'],
+  [/台灣大哥大|中華電信|遠傳|台灣之星|亞太電信|電信費|Apple Distribution/i, 'utils'],
+  [/咖啡|咖米|路易莎|星巴克|cama|伯朗|Louisa/i, 'coffee'],
+  [/手搖|清心|五十嵐|50嵐|可不可|迷客夏|茶湯會|一沐日|得正/, 'bubbletea'],
+  [/藥局|藥妝|診所|醫院|牙醫|康是美|屈臣氏/, 'medical'],
+  [/誠品|書局|書店|博客來|金石堂/, 'books'],
+  [/健身|運動中心|World Gym/i, 'gym'],
+  [/全聯|家樂福|大潤發|愛買|美廉社|超市|量販/, 'daily'],
+  [/統一超商|全家便利|萊爾富|OK超商/, 'snack'],
+  [/燒肉|燒烤|串燒|火鍋|摩斯|安心食品|麥當勞|和德昌|肯德基|富利餐飲|必勝客|達美樂|餐飲|餐廳|食堂|小吃|麵|飯|鍋|早餐|豆漿/, 'dinner'],
+];
+
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+function carrierSeller(name) {
+  for (const [re, alias] of CARRIER_ALIAS) if (re.test(name)) return alias;
+  const s = name.replace(/股份有限公司|有限公司|商行|企業社|工作室/g, '').trim();
+  return s.length > 12 ? s.slice(0, 12) + '…' : s;
+}
+
+function carrierGuessCat(seller, items) {
+  const hay = seller + ' ' + items.map((i) => i.name).join(' ');
+  for (const [re, catId] of CARRIER_RULES) {
+    if (re.test(hay) && cats.some((c) => c.id === catId)) return catId;
+  }
+  return cats.some((c) => c.id === 'other') ? 'other' : cats[0].id;
+}
+
+// 平台 CSV：一列一個品項，品名在最後一欄（可能含逗號，其餘欄位取前 13 欄）
+function parseCarrierCSV(text, importedInv) {
+  const byInv = new Map();
+  for (const line of text.replace(/^﻿/, '').split(/\r?\n/)) {
+    const cols = line.split(',');
+    if (cols.length < 14 || !/^\d{8}$/.test(cols[1])) continue;
+    if (/作廢/.test(cols[4])) continue;
+    const inv = cols[2];
+    if (!byInv.has(inv)) {
+      byInv.set(inv, { inv, ymd: cols[1], seller: cols[7], items: [], total: 0 });
+    }
+    const it = { name: cols.slice(13).join(','), amount: Number(cols[12]) || 0 };
+    byInv.get(inv).items.push(it);
+    byInv.get(inv).total += it.amount;
+  }
+  const invoices = [];
+  let skippedImported = 0;
+  for (const v of byInv.values()) {
+    if (v.total <= 0) continue;
+    if (importedInv.includes(v.inv)) { skippedImported++; continue; }
+    v.total = Math.round(v.total * 100) / 100;
+    const y = Number(v.ymd.slice(0, 4)), m = Number(v.ymd.slice(4, 6)), d = Number(v.ymd.slice(6, 8));
+    v.ts = new Date(y, m - 1, d, 12).getTime();
+    v.dateText = `${m}/${d}`;
+    v.sellerShort = carrierSeller(v.seller);
+    v.catGuess = carrierGuessCat(v.seller, v.items);
+    const names = [...v.items].sort((a, b) => b.amount - a.amount).map((i) => i.name.trim()).filter(Boolean);
+    v.note = v.items.length === 1
+      ? `${v.sellerShort}｜${names[0] || ''}`
+      : `${v.sellerShort}｜${names.slice(0, 3).join('、')}${names.length > 3 ? '…' : ''}`;
+    // 疑似重複：同一天已有同金額的支出（手動記過或 email 已入帳）
+    v.dup = txs.some((t) => isSpend(t) && t.amount === v.total && dateStr(new Date(t.ts)) === dateStr(new Date(v.ts)));
+    invoices.push(v);
+  }
+  invoices.sort((a, b) => b.ts - a.ts);
+  return { invoices, skippedImported };
+}
+
+function pickCarrierFile() {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.csv,text/csv';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    const importedInv = (await store.getKV('carrierInv')) || [];
+    const { invoices, skippedImported } = parseCarrierCSV(await f.text(), importedInv);
+    if (!invoices.length) {
+      showToast(skippedImported
+        ? `這份檔案的 ${skippedImported} 張發票之前都匯入過囉`
+        : '讀不到發票，確認是平台下載的「雲端發票明細」CSV 喔');
+      return;
+    }
+    carrierReview = { invoices, skippedImported };
+    animateSwap();
+    renderCarrierReview();
+  };
+  inp.click();
+}
+
+function renderCarrierReview() {
+  const { invoices, skippedImported } = carrierReview;
+  const catOpts = (sel) => cats.map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${c.emo} ${c.name}</option>`).join('');
+  const payOpts = (sel) => payments.map((p) => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${p.emo} ${p.name}</option>`).join('');
+  const rows = invoices.map((v) => `
+    <div class="rec-row" style="flex-wrap:wrap;gap:6px;align-items:center">
+      <input type="checkbox" id="cchk-${v.inv}" ${v.dup ? '' : 'checked'} style="width:20px;height:20px;accent-color:var(--accent)">
+      <div class="mid" style="min-width:0">
+        <div class="name">${escHtml(v.sellerShort)} · ${fmt(v.total)}${v.dup ? ' <span style="color:var(--warn,#C77)">⚠️ 疑似重複</span>' : ''}</div>
+        <div class="info">${v.dateText} · ${escHtml(v.items.length === 1 ? (v.items[0].name || '') : v.items.length + ' 個品項')} · ${v.inv}</div>
+      </div>
+      <select id="ccat-${v.inv}" style="flex:1;min-width:110px">${catOpts(v.catGuess)}</select>
+      <select id="cpay-${v.inv}" style="flex:1;min-width:110px">${payOpts(selectedPay)}</select>
+    </div>`).join('');
+
+  view.innerHTML = `
+    <div class="step-head">
+      <button class="step-back" data-act="carrier-cancel">‹</button>
+      <div>
+        <div class="step-amt">🧾 載具明細匯入</div>
+        <div class="step-sub">${invoices.length} 張發票，共 ${fmt(invoices.reduce((s, v) => s + v.total, 0))}${skippedImported ? `（另 ${skippedImported} 張之前匯入過，已跳過）` : ''}</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="sub">確認分類與帳戶後入帳。「疑似重複」＝同一天已有同金額的紀錄，預設不勾。</div>
+      ${rows}
+    </div>
+    <button class="btn" data-act="carrier-import">匯入勾選的發票</button>
+    <button class="btn ghost" data-act="carrier-cancel">取消</button>`;
+}
+
+async function doCarrierImport() {
+  const importedInv = (await store.getKV('carrierInv')) || [];
+  let n = 0, sum = 0;
+  for (const v of carrierReview.invoices) {
+    const box = document.getElementById('cchk-' + v.inv);
+    if (!box || !box.checked) continue;
+    const catId = document.getElementById('ccat-' + v.inv).value;
+    const payId = document.getElementById('cpay-' + v.inv).value;
+    await store.put('tx', { id: store.uid(), kind: 'expense', amount: v.total, catId, note: v.note, ts: v.ts, source: 'carrier', payId });
+    importedInv.push(v.inv);
+    n++;
+    sum += v.total;
+  }
+  if (!n) { showToast('沒有勾選任何發票喔'); return; }
+  await store.setKV('carrierInv', importedInv);
+  carrierReview = null;
+  const coinMsg = await awardRecordCoins();
+  await reload();
+  await checkAchievements();
+  renderSettings();
+  showToast(`🧾 匯入 ${n} 張發票，共 ${fmt(sum)}，怪獸們飽餐一頓！${coinMsg}`);
+}
+
+// 除錯用鉤子（console 可直接測載具匯入流程）
+window.__carrier = {
+  parse: (text, imported) => parseCarrierCSV(text, imported || []),
+  showReview: (r) => { carrierReview = r; renderCarrierReview(); },
+};
+
 function renderSettings() {
   const themeBtns = [['auto', '跟隨系統'], ['light', '淺色'], ['dark', '深色']]
     .map(([v, label]) => `<button data-theme-set="${v}" class="${theme === v ? 'on' : ''}">${label}</button>`)
@@ -1250,6 +1413,12 @@ function renderSettings() {
       </div>
       <button class="btn" data-act="save-sync">儲存設定</button>
       <button class="btn ghost" data-act="sync-now">立即同步</button>
+    </div>
+
+    <h2>載具發票匯入</h2>
+    <div class="card">
+      <div class="sub">到 <b>財政部電子發票平台</b> →「發票查詢及捐贈」查當月 → 勾選發票 →「下載CSV檔」，再回這裡匯入。會自動猜分類、擋掉重複的，確認後一鍵入帳。</div>
+      <button class="btn" data-act="import-carrier">🧾 選擇 CSV 檔匯入</button>
     </div>
 
     <h2>定期開支</h2>
@@ -1795,6 +1964,13 @@ view.addEventListener('click', async (e) => {
   if (a === 'open-shop') { homeSub = 'shop'; animateSwap(); return renderShop(); }
   if (a === 'open-achievements') { homeSub = 'achievements'; animateSwap(); return renderAchievements(); }
   if (a === 'home-back') { homeSub = null; animateSwap(); return renderHome(); }
+  if (a === 'import-carrier') return pickCarrierFile();
+  if (a === 'carrier-import') return doCarrierImport();
+  if (a === 'carrier-cancel') {
+    carrierReview = null;
+    animateSwap();
+    return renderSettings();
+  }
   if (a === 'add-rec') return addRec();
   if (a === 'add-cat') return addCat();
   if (a === 'save-cat') return saveCatEdit();

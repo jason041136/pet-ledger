@@ -1,4 +1,4 @@
-const CACHE = 'pet-ledger-v16';
+const CACHE = 'pet-ledger-v17';
 const ASSETS = [
   './',
   'index.html',
