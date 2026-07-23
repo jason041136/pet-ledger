@@ -16,12 +16,15 @@ const LABEL_TODO = '記帳待處理'; // Gmail 篩選器把收據信貼上這個
 const LABEL_DONE = '記帳已處理'; // 解析完會改貼這個標籤
 
 // 收據信解析規則：match 比對寄件者+主旨，命中就用該商家名稱與預設分類
+// body（選填）：再比對信件內文，用來區分同一寄件者的不同商品（例如 Apple 收據買的是 iCloud 還是 LINE）
 // 分類 id 對照 App：fun 娛樂 / gacha 課金儲值 / utils 水電網路 / shopping 購物
 // rent 房租 / meals 三餐 / transport 交通 / social 聚餐社交 / saving 儲蓄...
 const PARSERS = [
   // ── 已確認的定期扣款（2026-07 掃描信箱結果）──
   { match: /定期定額/, merchant: '凱基定期定額', cat: 'invest' },        // 凱基證券台股定期定額扣款通知（Hotmail 轉寄過來）
-  { match: /apple|itunes/i, merchant: 'iCloud+', cat: 'utils' },        // Apple 每月 7 號 NT$90（iCloud+ 200GB）
+  { match: /apple|itunes/i, body: /iCloud/i, merchant: 'iCloud+', cat: 'utils' },       // 每月 7 號 NT$90（200GB）
+  { match: /apple|itunes/i, body: /LINE|月租方案/, merchant: 'LINE 月租', cat: 'fun' }, // App Store 內購，每月 12 號 NT$80
+  { match: /apple|itunes/i, merchant: 'Apple 訂閱', cat: 'utils' },      // 其他 Apple 扣款
   { match: /anthropic/i, merchant: 'Claude', cat: 'books' },            // Anthropic 每月 30 號
 
   // ── 預備規則：目前信箱收不到，之後開通/轉寄進來就會自動生效 ──
@@ -38,6 +41,32 @@ const PARSERS = [
 ];
 
 /* ======== 以下不用改 ======== */
+
+/* 設定同步自我測試：寫入假設定→驗證新舊時戳比對→清除，不會留下任何資料 */
+function testSettingsSync() {
+  const fake = { cats: [{ id: '__test__', name: '測試分類', pet: 'pulu' }], payments: [], inccats: [], recurring: [] };
+  const r1 = sync({ txs: [], settings: fake, settingsAt: 9999999 });
+  const okWrite = r1.settingsAt === 9999999 && r1.settings && r1.settings.cats[0].id === '__test__';
+
+  // 較舊的時戳不可以覆蓋雲端
+  const older = { cats: [{ id: '__should_not_win__' }], payments: [], inccats: [], recurring: [] };
+  const r2 = sync({ txs: [], settings: older, settingsAt: 5 });
+  const okGuard = r2.settingsAt === 9999999 && r2.settings.cats[0].id === '__test__';
+
+  // 清乾淨，回到測試前的狀態
+  const st = settingsSheet();
+  const d = st.getDataRange().getValues();
+  for (let i = d.length - 1; i >= 1; i--) {
+    if (String(d[i][0]) === 'all') st.deleteRow(i + 1);
+  }
+  const r3 = sync({ txs: [], settings: null, settingsAt: 0 });
+  const okClean = r3.settingsAt === 0 && r3.settings === null;
+
+  const result = '寫入=' + okWrite + ' 舊時戳擋下=' + okGuard + ' 清除還原=' + okClean;
+  Logger.log(result);
+  return result;
+}
+
 
 function out(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
@@ -65,6 +94,11 @@ function txSheet() {
 
 function pendingSheet() {
   return sheet('pending', ['id', 'date', 'amount', 'cat', 'merchant', 'subject', 'status']);
+}
+
+// 設定備份（分類/帳戶/定期開支）：整包 JSON 存一列，用時戳比新舊
+function settingsSheet() {
+  return sheet('settings', ['key', 'json', 'updatedAt']);
 }
 
 function doGet() {
@@ -141,7 +175,31 @@ function sync(body) {
       pending.push({ id: String(r[0]), date: String(r[1]), amount: Number(r[2]), cat: String(r[3]), merchant: String(r[4]), subject: String(r[5]) });
     }
   }
-  return { ok: true, txs: txs, deletedIds: deletedIds, pending: pending };
+  // 設定同步：客戶端時戳較新就覆蓋雲端，否則把雲端這份回傳讓客戶端還原
+  const st = settingsSheet();
+  const stData = st.getDataRange().getValues();
+  let stRow = -1, stJson = '', stAt = 0;
+  for (let i = 1; i < stData.length; i++) {
+    if (String(stData[i][0]) === 'all') {
+      stRow = i + 1;
+      stJson = String(stData[i][1] || '');
+      stAt = Number(stData[i][2]) || 0;
+    }
+  }
+  const clientAt = Number(body.settingsAt) || 0;
+  if (body.settings && clientAt > stAt) {
+    const j = JSON.stringify(body.settings);
+    if (stRow > 0) st.getRange(stRow, 1, 1, 3).setValues([['all', j, clientAt]]);
+    else st.appendRow(['all', j, clientAt]);
+    stJson = j;
+    stAt = clientAt;
+  }
+  let settings = null;
+  if (stJson) {
+    try { settings = JSON.parse(stJson); } catch (err) { settings = null; }
+  }
+
+  return { ok: true, txs: txs, deletedIds: deletedIds, pending: pending, settings: settings, settingsAt: stAt };
 }
 
 /* ======== Gmail 收據掃描（設定時間觸發器每小時跑一次） ======== */
@@ -175,11 +233,12 @@ function scanReceipts() {
       let merchant = from.replace(/<.*>/, '').replace(/"/g, '').trim();
       let cat = 'shopping';
       for (let i = 0; i < PARSERS.length; i++) {
-        if (PARSERS[i].match.test(from) || PARSERS[i].match.test(subject)) {
-          merchant = PARSERS[i].merchant;
-          cat = PARSERS[i].cat;
-          break;
-        }
+        const p = PARSERS[i];
+        if (!(p.match.test(from) || p.match.test(subject))) continue;
+        if (p.body && !p.body.test(text)) continue;   // 有指定內文條件就要一起命中
+        merchant = p.merchant;
+        cat = p.cat;
+        break;
       }
       ps.appendRow([id, Utilities.formatDate(msg.getDate(), TZ, "yyyy-MM-dd'T'HH:mm:ss"), amount, cat, merchant, subject.slice(0, 80), 'new']);
       existing[id] = true;

@@ -2063,7 +2063,7 @@ view.addEventListener('click', async (e) => {
     if (r.ok) {
       await reload();
       render();
-      showToast(`☁️ 同步完成：雲端共 ${r.pulled} 筆帳目${r.pending ? `，${r.pending} 筆扣款待確認` : ''}`);
+      showToast(`☁️ 同步完成：雲端共 ${r.pulled} 筆帳目${r.pending ? `，${r.pending} 筆扣款待確認` : ''}${r.settingsPulled ? '，並已還原分類與定期開支設定' : ''}`);
     } else if (r.error === 'not-configured') {
       showToast('先填入網址和通關密語，按「儲存設定」');
     } else {
@@ -2095,6 +2095,9 @@ async function boot() {
     userName = (await store.getKV('userName')) || '';
     await showLockScreen();
   }
+
+  // 種預設值與一次性遷移都不算「使用者編輯設定」，靜音以免蓋掉雲端設定
+  store.setQuiet(true);
 
   const existing = await store.getAll('cats');
   if (!existing.length) {
@@ -2192,6 +2195,8 @@ async function boot() {
     await store.setKV('acctV5', 1);
   }
 
+  store.setQuiet(false);
+
   await reload();
   const { newTxs, updated } = postDue(recurring);
   if (newTxs.length) {
@@ -2213,6 +2218,7 @@ async function boot() {
       await reload();
       render();
       if (r.pending) showToast(`📬 有 ${r.pending} 筆扣款通知待確認（記帳頁最上方）`);
+      else if (r.settingsPulled) showToast('☁️ 已從雲端還原分類與定期開支設定');
     });
   }
 }
