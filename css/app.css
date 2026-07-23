@@ -624,6 +624,8 @@ h2 {
   padding: 9px 8px; font-size: 13.5px; color: var(--text); font-family: inherit;
 }
 .pend-ctl .chip { flex-shrink: 0; padding: 9px 14px; }
+.pend-ctl .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.dup-hit { color: var(--ok, #3F9E76); font-weight: 600; margin-top: 3px; }
 
 /* ---------- 帳目編輯面板 ---------- */
 #edit-sheet-wrap { position: fixed; inset: 0; z-index: 40; opacity: 0; transition: opacity .25s; }

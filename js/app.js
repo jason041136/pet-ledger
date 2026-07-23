@@ -112,6 +112,15 @@ function showLockScreen() {
   });
 }
 
+// 改過分類/帳戶/定期開支後，自動在背景備份到雲端（合併 3 秒內的連續操作）
+let lastSettingsAt = null;
+let autoSyncTimer;
+function autoSyncSettings() {
+  if (!syncCfg.url || !syncCfg.token) return;
+  clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(() => { doSync().catch(() => {}); }, 3000);
+}
+
 async function reload() {
   txs = await store.getAll('tx');
   recurring = await store.getAll('recurring');
@@ -138,6 +147,11 @@ async function reload() {
   owned = (await store.getKV('owned')) || [];
   equipped = (await store.getKV('equipped')) || {};
   achieved = (await store.getKV('achieved')) || [];
+
+  // 設定有變動就排一次背景同步（第一次載入不算）
+  const sAt = (await store.getKV('settingsAt')) || 0;
+  if (lastSettingsAt !== null && sAt !== lastSettingsAt) autoSyncSettings();
+  lastSettingsAt = sAt;
 }
 
 /* ================= entry ================= */
@@ -195,21 +209,46 @@ function renderEntry() {
   else renderStep3();
 }
 
+// 扣款通知自動核對：這筆是不是已經記過了（定期開支自動入帳、或自己手動記過）
+// 商家名對得上就放寬到 12 天（帳單日與信件日常常差好幾天），否則只認 3 天內的同額支出
+function pendingDupe(p) {
+  const amt = Number(p.amount);
+  const ts = p.date ? new Date(p.date).getTime() : Date.now();
+  const merch = String(p.merchant || '').trim();
+  return txs.find((t) => {
+    if (!isSpend(t) || t.amount !== amt) return false;
+    const days = Math.abs(t.ts - ts) / 864e5;
+    const note = String(t.note || '').trim();
+    const nameHit = merch && note && (note.includes(merch) || merch.includes(note));
+    return nameHit ? days <= 12 : days <= 3;
+  }) || null;
+}
+
 function renderStep1() {
+  const dupes = pending.map(pendingDupe);
+  const dupCount = dupes.filter(Boolean).length;
   const pendHtml = (entryKind === 'expense' && pending.length) ? `
     <div class="card">
-      <div class="sub">📬 偵測到 ${pending.length} 筆扣款通知，確認後入帳：</div>
-      ${pending.map((p) => {
+      <div class="sub">📬 偵測到 ${pending.length} 筆扣款通知${dupCount ? `，其中 ${dupCount} 筆已核對到相符紀錄` : '，確認後入帳'}：</div>
+      ${pending.map((p, i) => {
         const opts = cats.map((c) => `<option value="${c.id}" ${c.id === p.cat ? 'selected' : ''}>${c.emo} ${c.name}</option>`).join('');
+        const d = dupes[i];
+        const dupLine = d
+          ? `<div class="info dup-hit">✅ 已經記過了：${catById(d.catId).emo}${catById(d.catId).name} ${fmt(d.amount)}　${dateStr(new Date(d.ts))}${d.source === 'recurring' ? '（定期開支自動入帳）' : ''}</div>`
+          : '';
         return `<div class="rec-row" style="border-bottom:none;padding-bottom:2px">
           <div class="mid">
             <div class="name">${p.merchant} · ${fmt(p.amount)}</div>
             <div class="info">${(p.date || '').slice(0, 10)}　${p.subject || ''}</div>
+            ${dupLine}
           </div></div>
         <div class="pend-ctl">
           <select id="pcat-${p.id}">${opts}</select>
-          <button class="chip" data-pend-ok="${p.id}">入帳</button>
-          <button class="chip" data-pend-no="${p.id}">忽略</button>
+          ${d
+            ? `<button class="chip on" data-pend-no="${p.id}">✔ 已記過，忽略</button>
+               <button class="chip" data-pend-ok="${p.id}">仍要入帳</button>`
+            : `<button class="chip" data-pend-ok="${p.id}">入帳</button>
+               <button class="chip" data-pend-no="${p.id}">忽略</button>`}
         </div>`;
       }).join('')}
     </div>` : '';
