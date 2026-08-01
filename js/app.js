@@ -236,13 +236,17 @@ function renderStep1() {
         const dupLine = d
           ? `<div class="info dup-hit">✅ 已經記過了：${catById(d.catId).emo}${catById(d.catId).name} ${fmt(d.amount)}　${dateStr(new Date(d.ts))}${d.source === 'recurring' ? '（定期開支自動入帳）' : ''}</div>`
           : '';
+        const usd = /US\$/.test(p.merchant || '');
         return `<div class="rec-row" style="border-bottom:none;padding-bottom:2px">
           <div class="mid">
-            <div class="name">${p.merchant} · ${fmt(p.amount)}</div>
+            <div class="name">${p.merchant}</div>
             <div class="info">${(p.date || '').slice(0, 10)}　${p.subject || ''}</div>
+            ${usd ? '<div class="info dup-hit" style="color:var(--muted)">💱 美金訂閱：下方金額是估算，可依信用卡帳單改</div>' : ''}
             ${dupLine}
           </div></div>
         <div class="pend-ctl">
+          <span class="pamt-cur">NT$</span>
+          <input id="pamt-${p.id}" class="pamt" type="number" inputmode="numeric" value="${p.amount}">
           <select id="pcat-${p.id}">${opts}</select>
           ${d
             ? `<button class="chip on" data-pend-no="${p.id}">✔ 已記過，忽略</button>
@@ -496,12 +500,13 @@ async function resolvePending(id, confirmed) {
   const p = pending.find((x) => x.id === id);
   if (!p) return;
   const catId = document.getElementById('pcat-' + id)?.value || p.cat;
+  const amt = Number(document.getElementById('pamt-' + id)?.value) || Number(p.amount);
   const resolved = (await store.getKV('pendingResolved')) || [];
   resolved.push({ id, status: confirmed ? 'confirmed' : 'ignored' });
   await store.setKV('pendingResolved', resolved);
   if (confirmed) {
     const ts = p.date ? new Date(p.date).getTime() : Date.now();
-    await store.put('tx', { id: 'p_' + id, kind: 'expense', amount: Number(p.amount), catId, note: p.merchant, ts, source: 'email', payId: 'sinopac' });
+    await store.put('tx', { id: 'p_' + id, kind: 'expense', amount: amt, catId, note: p.merchant, ts, source: 'email', payId: 'sinopac' });
   }
   pending = pending.filter((x) => x.id !== id);
   await store.setKV('pending', pending);
@@ -509,7 +514,7 @@ async function resolvePending(id, confirmed) {
   renderEntry();
   if (confirmed) {
     const pet = petById(catById(catId).pet);
-    showToast(`${pet.name}：收到 ${p.merchant} 的 ${fmt(p.amount)}，已入帳！`, pet.color);
+    showToast(`${pet.name}：收到 ${p.merchant} 的 ${fmt(amt)}，已入帳！`, pet.color);
   } else {
     showToast('已忽略這筆通知');
   }

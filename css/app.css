@@ -625,6 +625,12 @@ h2 {
 }
 .pend-ctl .chip { flex-shrink: 0; padding: 9px 14px; }
 .pend-ctl .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.pend-ctl { flex-wrap: wrap; }
+.pamt-cur { font-size: 13px; color: var(--muted); align-self: center; }
+.pend-ctl .pamt {
+  width: 88px; flex-shrink: 0; background: var(--bg); border: 1.5px solid var(--line); border-radius: 12px;
+  padding: 9px 8px; font-size: 14px; color: var(--text); font-family: var(--font-num);
+}
 .dup-hit { color: var(--ok, #3F9E76); font-weight: 600; margin-top: 3px; }
 
 /* ---------- 帳目編輯面板 ---------- */

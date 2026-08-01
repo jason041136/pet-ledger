@@ -15,6 +15,10 @@ const TZ = 'Asia/Taipei';
 const LABEL_TODO = '記帳待處理'; // Gmail 篩選器把收據信貼上這個標籤
 const LABEL_DONE = '記帳已處理'; // 解析完會改貼這個標籤
 
+// 美金訂閱（如 Claude Pro）收據只有 US$ 金額，先用這個匯率估台幣，
+// App 待確認時金額可改，使用者依信用卡帳單填實際扣款最準
+const USD_TWD = 32.5;
+
 // 收據信解析規則：match 比對寄件者+主旨，命中就用該商家名稱與預設分類
 // body（選填）：再比對信件內文，用來區分同一寄件者的不同商品（例如 Apple 收據買的是 iCloud 還是 LINE）
 // 分類 id 對照 App：fun 娛樂 / gacha 課金儲值 / utils 水電網路 / shopping 購物
@@ -25,7 +29,7 @@ const PARSERS = [
   { match: /apple|itunes/i, body: /iCloud/i, merchant: 'iCloud+', cat: 'utils' },       // 每月 7 號 NT$90（200GB）
   { match: /apple|itunes/i, body: /LINE|月租方案/, merchant: 'LINE 月租', cat: 'fun' }, // App Store 內購，每月 12 號 NT$80
   { match: /apple|itunes/i, merchant: 'Apple 訂閱', cat: 'utils' },      // 其他 Apple 扣款
-  { match: /anthropic/i, merchant: 'Claude', cat: 'books' },            // Anthropic 每月 30 號
+  { match: /anthropic/i, merchant: 'Claude Pro', cat: 'books', currency: 'USD' }, // 每月 30 號 US$20（換算台幣估值，確認時可改）
 
   // ── 預備規則：目前信箱收不到，之後開通/轉寄進來就會自動生效 ──
   { match: /netflix/i, merchant: 'Netflix', cat: 'fun' },               // 注意：Netflix 目前直接刷永豐卡、不寄收據信
@@ -232,15 +236,23 @@ function scanReceipts() {
 
       let merchant = from.replace(/<.*>/, '').replace(/"/g, '').trim();
       let cat = 'shopping';
+      let currency = '';
       for (let i = 0; i < PARSERS.length; i++) {
         const p = PARSERS[i];
         if (!(p.match.test(from) || p.match.test(subject))) continue;
         if (p.body && !p.body.test(text)) continue;   // 有指定內文條件就要一起命中
         merchant = p.merchant;
         cat = p.cat;
+        currency = p.currency || '';
         break;
       }
-      ps.appendRow([id, Utilities.formatDate(msg.getDate(), TZ, "yyyy-MM-dd'T'HH:mm:ss"), amount, cat, merchant, subject.slice(0, 80), 'new']);
+      // 美金訂閱：抓到的是 US$ 金額，換算台幣估值，並在商家名註明原始美金
+      let finalAmount = amount;
+      if (currency === 'USD') {
+        finalAmount = Math.round(amount * USD_TWD);
+        merchant = merchant + '（US$' + amount + '）';
+      }
+      ps.appendRow([id, Utilities.formatDate(msg.getDate(), TZ, "yyyy-MM-dd'T'HH:mm:ss"), finalAmount, cat, merchant, subject.slice(0, 80), 'new']);
       existing[id] = true;
     });
     th.removeLabel(todo);
