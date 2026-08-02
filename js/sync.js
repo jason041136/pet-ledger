@@ -2,7 +2,7 @@ import * as store from './db.js';
 
 const SETTING_STORES = ['recurring', 'cats', 'inccats', 'payments'];
 
-export async function doSync() {
+export async function doSync(_bootstrapped) {
   const url = await store.getKV('syncUrl');
   const token = await store.getKV('syncToken');
   if (!url || !token) return { ok: false, error: 'not-configured' };
@@ -68,6 +68,17 @@ export async function doSync() {
     } finally {
       store.setQuiet(false);
     }
+  }
+
+  // 首次備份：雲端完全沒有設定、本機也還沒蓋過時戳（例如在設定同步功能上線前就裝好的裝置）
+  // → 把本機設定當基準推上雲。stamp 後重跑一次即會帶著設定上傳（只做一層，避免無限迴圈）
+  if (!_bootstrapped && !settingsPulled && !data.settings && settingsAt === 0) {
+    await store.setKV('settingsAt', Date.now());
+    await store.setKV('tombstones', []);
+    await store.setKV('dirtyTx', []);
+    await store.setKV('pendingResolved', []);
+    await store.setKV('pending', data.pending || []);
+    return doSync(true);
   }
 
   await store.setKV('tombstones', []);
