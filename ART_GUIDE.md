@@ -5,9 +5,9 @@
 - **尺寸**：1024×1024，正方形，角色置中、佔畫面約 70%
 - **背景**：純白（之後去背）或直接要求透明背景
 - **檔名與資料夾**：去背 PNG 放進 `img/pets/`，命名 `{怪獸id}_{狀態}.png`
-  - 怪獸 id：`pulu`噗嚕 / `momo`墨墨 / `jin`金金 / `zhuan`磚磚 / `jo`啾啾
+  - 怪獸 id：`pulu`噗嚕 / `momo`墨墨 / `jin`金金 / `zhuan`磚磚 / `jo`啾啾 / `meishi`飽飽
   - 狀態：`idle`平常 / `happy`開心 / `fat`肥胖失控 / `sad`被冷落
-  - 例：`pulu_fat.png`、`momo_idle.png`，共 5×4＝20 張
+  - 例：`pulu_fat.png`、`meishi_idle.png`，共 6×4＝24 張
 - **App 會自動偵測**：有圖用圖、沒圖用內建 SVG，可以一隻一隻慢慢換
 
 ## 統一風格字串（每張都要加在 prompt 開頭）
@@ -106,6 +106,22 @@ color palette: pink body #ED93B1, deep rose wings #D4537E, dark plum features #4
 | happy | dancing with party confetti falling around, wings spread wide, singing note symbols |
 | fat | round like a balloon, wearing tilted party hat, exhausted but happy grin, holding empty drink |
 | sad | grey-ish faded feathers, drooping head feather, sitting alone with a wilted balloon |
+
+## 🍜 飽飽（meishi）— 貪吃美食獸・美食家
+
+```
+a chubby round peach-orange foodie monster wearing a fluffy white chef's hat,
+big round sparkly eyes with white highlights, rosy cheeks, small pink tongue licking its lips,
+happy gourmet expression, soft plump body,
+color palette: warm peach-orange body #EC8A5C, white chef hat #FFFDF8, dark brown features #3A1A10, rosy pink cheeks and tongue #F0736F
+```
+
+| 狀態 | 追加 prompt |
+|---|---|
+| idle | standing happily holding a tiny fork and spoon in stubby hands, content satisfied smile |
+| happy | eyes sparkling like stars, hugging a steaming bowl of ramen noodles, drooling with joy, little food sparkles floating around |
+| fat | extremely round and stuffed full, tiny napkin tucked at neck, sitting behind a pile of empty plates, blissful over-full belly |
+| sad | droopy hungry expression, empty plate and lonely fork, tummy visibly rumbling, chef hat slightly deflated |
 
 ---
 
