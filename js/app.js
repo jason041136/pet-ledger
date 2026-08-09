@@ -2272,6 +2272,13 @@ async function boot() {
   if (syncCfg.url && syncCfg.token) {
     doSync().then(async (r) => {
       if (!r.ok) return;
+      // 只有雲端真的帶回新資料才重繪，避免開 App 幾秒後無謂刷新打斷正在操作
+      if (!r.changed) return;
+      // 使用者正在記帳輸入金額時不強制重繪，改用提示，不打斷操作
+      if (tab === 'entry' && (amount || noteVal)) {
+        if (r.pending) showToast(`📬 有 ${r.pending} 筆扣款通知待確認（記帳頁最上方）`);
+        return;
+      }
       await reload();
       render();
       if (r.pending) showToast(`📬 有 ${r.pending} 筆扣款通知待確認（記帳頁最上方）`);

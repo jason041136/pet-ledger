@@ -20,8 +20,8 @@ export const PETS = [
     svg: `<svg viewBox="0 0 100 100"><path d="M50 22 C50 10 60 6 64 8 C60 12 58 18 56 24Z" fill="#D4537E"/><circle cx="50" cy="58" r="34" fill="#ED93B1"/><ellipse cx="62" cy="66" rx="13" ry="17" fill="#D4537E"/><circle cx="38" cy="48" r="5" fill="#4B1528"/><circle cx="56" cy="48" r="5" fill="#4B1528"/><path d="M42 60 L47 68 L52 60Z" fill="#BA7517"/></svg>`
   },
   {
-    id: 'meishi', name: '飽飽', title: '美食家', color: '#E06A4B', deep: '#8A2E1B',
-    svg: `<svg viewBox="0 0 100 100"><ellipse cx="50" cy="20" rx="21" ry="12" fill="#FFF5EA"/><rect x="33" y="19" width="34" height="11" rx="3.5" fill="#F1E2CE"/><circle cx="50" cy="60" r="32" fill="#E06A4B"/><circle cx="39" cy="55" r="5" fill="#3A140E"/><circle cx="61" cy="55" r="5" fill="#3A140E"/><path d="M39 66 Q50 79 61 66Z" fill="#3A140E"/><ellipse cx="50" cy="72" rx="6" ry="4" fill="#F6A6B4"/><circle cx="31" cy="64" r="5" fill="#F29A7E" opacity="0.7"/><circle cx="69" cy="64" r="5" fill="#F29A7E" opacity="0.7"/></svg>`
+    id: 'meishi', name: '飽飽', title: '美食家', color: '#EC8A5C', deep: '#9A3D1E',
+    svg: `<svg viewBox="0 0 100 100"><circle cx="37" cy="17" r="7.5" fill="#FFFDF8"/><circle cx="63" cy="17" r="7.5" fill="#FFFDF8"/><circle cx="50" cy="11" r="9" fill="#FFFDF8"/><rect x="33" y="20" width="34" height="10" rx="5" fill="#FFFDF8"/><rect x="33" y="26" width="34" height="4" rx="2" fill="#EFE4D2"/><ellipse cx="50" cy="63" rx="30" ry="29" fill="#EC8A5C"/><ellipse cx="50" cy="70" rx="17" ry="14" fill="#F6AE86" opacity="0.55"/><circle cx="32" cy="68" r="5.5" fill="#F0736F" opacity="0.5"/><circle cx="68" cy="68" r="5.5" fill="#F0736F" opacity="0.5"/><circle cx="40" cy="57" r="6.5" fill="#3A1A10"/><circle cx="60" cy="57" r="6.5" fill="#3A1A10"/><circle cx="42.3" cy="54.7" r="2.3" fill="#fff"/><circle cx="62.3" cy="54.7" r="2.3" fill="#fff"/><path d="M43 68 Q50 74 57 68" stroke="#3A1A10" stroke-width="2.6" fill="none" stroke-linecap="round"/><path d="M52 71 q4 1 3 5" stroke="#F0736F" stroke-width="2.6" fill="none" stroke-linecap="round"/></svg>`
   }
 ];
 

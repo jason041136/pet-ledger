@@ -35,7 +35,10 @@ export async function doSync(_bootstrapped) {
   }
   if (!data.ok) return { ok: false, error: data.error || 'server' };
 
+  // 記錄同步「是否真的改變了本機資料」，供呼叫端決定要不要重繪畫面（避免開 App 幾秒後無謂刷新打斷操作）
   const localById = new Map(txs.map((t) => [t.id, t]));
+  const prevPending = (await store.getKV('pending')) || [];
+  let newOrChangedTx = 0;
   for (const t of data.txs) {
     const local = localById.get(t.id);
     if (local) {
@@ -45,10 +48,19 @@ export async function doSync(_bootstrapped) {
       if (local.fromPay && t.fromPay == null) t.fromPay = local.fromPay;
       if (local.toPay && t.toPay == null) t.toPay = local.toPay;
       if (local.source === 'topup') t.source = 'topup';
+      // 內容有差異才算變動
+      if (local.amount !== t.amount || local.catId !== t.catId || local.note !== t.note ||
+          local.payId !== t.payId || local.source !== t.source) newOrChangedTx++;
+    } else {
+      newOrChangedTx++;
     }
     await store.put('tx', t);
   }
-  for (const id of data.deletedIds || []) await store.del('tx', id);
+  let deletedApplied = 0;
+  for (const id of data.deletedIds || []) {
+    if (localById.has(id)) deletedApplied++;
+    await store.del('tx', id);
+  }
 
   // 雲端設定比本機新 → 整包換掉（換手機、清資料後靠這個救回來）
   let settingsPulled = false;
@@ -86,5 +98,12 @@ export async function doSync(_bootstrapped) {
   await store.setKV('pendingResolved', []);
   await store.setKV('pending', data.pending || []);
   await store.setKV('lastSync', Date.now());
-  return { ok: true, pulled: data.txs.length, pending: (data.pending || []).length, settingsPulled };
+
+  const newPending = data.pending || [];
+  const pendingChanged =
+    prevPending.length !== newPending.length ||
+    prevPending.map((p) => p.id).sort().join() !== newPending.map((p) => p.id).sort().join();
+  const changed = newOrChangedTx > 0 || deletedApplied > 0 || settingsPulled || pendingChanged;
+
+  return { ok: true, pulled: data.txs.length, pending: newPending.length, settingsPulled, changed };
 }
