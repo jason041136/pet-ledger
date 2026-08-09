@@ -1118,8 +1118,6 @@ function renderAssets() {
   const now = new Date();
   const mt = monthTxs(txs, now.getFullYear(), now.getMonth());
   const nw = netWorth(payments, txs);
-  const assets = assetTotal(payments, txs);
-  const debt = cardDebtTotal(payments, txs);
   const monthInc = incomeTotal(mt);
   const monthExp = spendTotal(mt);
 
@@ -1137,14 +1135,14 @@ function renderAssets() {
     </div>`;
   }).join('') || '<div class="sub">還沒有資產帳戶</div>';
 
+  // 信用卡：只顯示「本月刷卡金額」供參考，不當負債、不計入淨資產
   const cardRows = cards.map((p) => {
-    const due = Math.max(0, -(balances[p.id] || 0));
+    const spent = mt.filter((t) => isSpend(t) && t.payId === p.id).reduce((s, t) => s + t.amount, 0);
     return `<div class="acct-row">
       <span class="ae">${p.emo}</span>
       <div class="mid"><div class="an">${p.name}</div>
-        <div class="info">${due > 0 ? '本期待繳' : '已繳清 🎉'}</div></div>
-      <span class="ab ${due > 0 ? 'due' : ''}">${due > 0 ? fmt(due) : fmt(0)}</span>
-      ${due > 0 ? `<button class="chip pay-btn" data-repay="${p.id}">還款</button>` : ''}
+        <div class="info">本月刷卡</div></div>
+      <span class="ab">${fmt(spent)}</span>
       <button class="del" data-delpay="${p.id}">✕</button>
     </div>`;
   }).join('') || '<div class="sub">還沒有信用卡</div>';
@@ -1155,10 +1153,6 @@ function renderAssets() {
     <div class="nw-card">
       <div class="nw-label">淨資產</div>
       <div class="nw-value">${fmt(nw)}</div>
-      <div class="nw-io">
-        <span>資產 ${fmt(assets)}</span>
-        <span>待繳 ${fmt(debt)}</span>
-      </div>
       <div class="nw-io" style="margin-top:4px">
         <span class="inc">本月收入 +${fmt(monthInc)}</span>
         <span class="exp">本月支出 −${fmt(monthExp)}</span>
@@ -1168,7 +1162,7 @@ function renderAssets() {
     <h2>資產帳戶</h2>
     <div class="card">${assetRows}</div>
 
-    <h2>信用卡待繳</h2>
+    <h2>信用卡（本月刷卡）</h2>
     <div class="card">${cardRows}</div>
 
     <h2>新增帳戶</h2>
@@ -1177,13 +1171,13 @@ function renderAssets() {
         <input id="acct-emo" placeholder="圖示 emoji" maxlength="4" autocomplete="off">
         <input id="acct-name" placeholder="名稱（例如 中信帳戶）" autocomplete="off">
         <select id="acct-type" class="full">${typeOpts}</select>
-        <input id="acct-init" class="full" type="number" inputmode="numeric" placeholder="起始餘額（信用卡填目前待繳，選填）">
+        <input id="acct-init" class="full" type="number" inputmode="numeric" placeholder="起始餘額（信用卡免填）">
       </div>
       <button class="btn" data-act="add-acct">新增帳戶</button>
     </div>
 
     <div class="card">
-      <div class="sub">💡 餘額隨記帳自動增減。刷卡 → 該卡待繳增加；還卡費 → 按「還款」從帳戶轉過去、待繳歸零。第一次用請按 ✎ 設定各帳戶實際餘額（信用卡設目前待繳金額）。</div>
+      <div class="sub">💡 資產餘額隨記帳自動增減，第一次用請按 ✎ 設定實際餘額。信用卡只當支付標籤：刷卡不影響淨資產，這裡只顯示本月各卡刷了多少供你對帳。</div>
     </div>`;
 }
 
@@ -1198,11 +1192,11 @@ async function addAccount() {
     return;
   }
   const order = Math.max(0, ...payments.map((p) => p.order || 0)) + 1;
-  // 信用卡：使用者填的是待繳金額（正數），內部存成負餘額
-  const initBalance = type === 'card' ? -Math.abs(init) : init;
+  // 信用卡走標籤模式（不追餘額）；其他帳戶記起始餘額
+  const isCardType = type === 'card';
   await store.put('payments', {
     id: 'acct_' + store.uid().slice(0, 8), name, emo, type,
-    tracked: true, initBalance, order
+    tracked: !isCardType, initBalance: isCardType ? 0 : init, order
   });
   await reload();
   renderAssets();
@@ -2240,6 +2234,25 @@ async function boot() {
   }
 
   store.setQuiet(false);
+
+  // 遷移：伙食（早/午/晚餐、咖啡）從磚磚移到新角色「飽飽（美食家）」
+  // 放在 setQuiet 之後 → put 會蓋 settingsAt 時戳並同步上雲（使用者已改過的分類不動）
+  if (!(await store.getKV('gourmetV1'))) {
+    const allCats = await store.getAll('cats');
+    for (const id of ['breakfast', 'lunch', 'dinner', 'coffee']) {
+      const c = allCats.find((x) => x.id === id);
+      if (c && c.pet === 'zhuan') await store.put('cats', { ...c, pet: 'meishi' });
+    }
+    await store.setKV('gourmetV1', 1);
+  }
+
+  // 遷移：信用卡改為「支付標籤」模式（tracked=false），不再追待繳、不計入淨資產
+  if (!(await store.getKV('cardTagV1'))) {
+    for (const p of await store.getAll('payments')) {
+      if (p.type === 'card' && p.tracked) await store.put('payments', { ...p, tracked: false });
+    }
+    await store.setKV('cardTagV1', 1);
+  }
 
   await reload();
   const { newTxs, updated } = postDue(recurring);

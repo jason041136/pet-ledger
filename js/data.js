@@ -18,6 +18,10 @@ export const PETS = [
   {
     id: 'jo', name: '啾啾', title: '社交娛樂', color: '#ED93B1', deep: '#993556',
     svg: `<svg viewBox="0 0 100 100"><path d="M50 22 C50 10 60 6 64 8 C60 12 58 18 56 24Z" fill="#D4537E"/><circle cx="50" cy="58" r="34" fill="#ED93B1"/><ellipse cx="62" cy="66" rx="13" ry="17" fill="#D4537E"/><circle cx="38" cy="48" r="5" fill="#4B1528"/><circle cx="56" cy="48" r="5" fill="#4B1528"/><path d="M42 60 L47 68 L52 60Z" fill="#BA7517"/></svg>`
+  },
+  {
+    id: 'meishi', name: '飽飽', title: '美食家', color: '#E06A4B', deep: '#8A2E1B',
+    svg: `<svg viewBox="0 0 100 100"><ellipse cx="50" cy="20" rx="21" ry="12" fill="#FFF5EA"/><rect x="33" y="19" width="34" height="11" rx="3.5" fill="#F1E2CE"/><circle cx="50" cy="60" r="32" fill="#E06A4B"/><circle cx="39" cy="55" r="5" fill="#3A140E"/><circle cx="61" cy="55" r="5" fill="#3A140E"/><path d="M39 66 Q50 79 61 66Z" fill="#3A140E"/><ellipse cx="50" cy="72" rx="6" ry="4" fill="#F6A6B4"/><circle cx="31" cy="64" r="5" fill="#F29A7E" opacity="0.7"/><circle cx="69" cy="64" r="5" fill="#F29A7E" opacity="0.7"/></svg>`
   }
 ];
 
@@ -34,14 +38,14 @@ export const DEFAULT_CATS = [
   { id: 'rent', name: '房租', emo: '🏠', pet: 'zhuan' },
   { id: 'utils', name: '水電網路', emo: '💡', pet: 'zhuan' },
   { id: 'transport', name: '交通', emo: '🚌', pet: 'zhuan' },
-  { id: 'breakfast', name: '早餐', emo: '🍳', pet: 'zhuan' },
-  { id: 'lunch', name: '午餐', emo: '🍜', pet: 'zhuan' },
-  { id: 'dinner', name: '晚餐', emo: '🍛', pet: 'zhuan' },
+  { id: 'breakfast', name: '早餐', emo: '🍳', pet: 'meishi' },
+  { id: 'lunch', name: '午餐', emo: '🍜', pet: 'meishi' },
+  { id: 'dinner', name: '晚餐', emo: '🍛', pet: 'meishi' },
   { id: 'daily', name: '日用品', emo: '🧻', pet: 'zhuan' },
   { id: 'social', name: '聚餐社交', emo: '🍻', pet: 'jo' },
   { id: 'fun', name: '娛樂', emo: '🎬', pet: 'jo' },
   { id: 'travel', name: '旅遊', emo: '✈️', pet: 'jo' },
-  { id: 'coffee', name: '咖啡', emo: '☕', pet: 'zhuan' },
+  { id: 'coffee', name: '咖啡', emo: '☕', pet: 'meishi' },
   { id: 'clothes', name: '治裝', emo: '👕', pet: 'pulu' },
   { id: 'tech', name: '3C配件', emo: '📱', pet: 'pulu' },
   { id: 'beauty', name: '美容美髮', emo: '💇', pet: 'jo' },
@@ -132,20 +136,34 @@ export const DIALOG = {
       mid: ['這個月玩了 {total}，剛剛好的快樂～'],
       high: ['咳咳…{share}% 都在玩，太兇了啦，嗓子都啞了…']
     }
+  },
+  meishi: {
+    feed: [
+      '{cat}！這一口我給滿分～',
+      '嗯～{amt} 花得值得，美味不能將就',
+      '本月第 {n} 次好好吃飯，人生就該如此嘛',
+      '色香味俱全！{cat} 收下啦～'
+    ],
+    idle: {
+      low: [
+        '{days} 天沒好好吃一頓了…別虧待自己的胃啊',
+        '這個月才 {share}%？美食值得多一點預算的'
+      ],
+      mid: ['本月吃了 {total}，有滋有味～'],
+      high: ['哇，本月 {share}% 都進了肚子！你真懂享受～不過也別撐壞囉']
+    }
   }
 };
 
-/* 帳戶。tracked=true 代表是真資產、有餘額（現金/銀行/悠遊卡/投資）；
-   信用卡走簡單模式 tracked=false，只當支付標籤、不追餘額。
-   initBalance = 使用者設定的起始餘額，目前餘額由交易即時計算。 */
-/* type: cash/bank/easycard/invest = 資產（正餘額）；card = 信用卡（負餘額 = 待繳）。
-   全部 tracked（有餘額）。淨資產 = 資產總額 − 信用卡待繳。 */
+/* 帳戶。tracked=true 代表是真資產、有餘額（現金/銀行/悠遊卡/投資），計入淨資產；
+   信用卡走簡單模式 tracked=false，只當支付標籤（保留回饋推薦），不追待繳、不計入淨資產。
+   淨資產 = 所有 tracked 帳戶餘額加總（不扣卡債）。信用卡消費只在資產頁顯示「本月刷卡」供參考。 */
 export const DEFAULT_PAYMENTS = [
   { id: 'cash', name: '現金', emo: '💵', type: 'cash', tracked: true, initBalance: 0, order: 0 },
   { id: 'bank', name: '銀行帳戶', emo: '🏦', type: 'bank', tracked: true, initBalance: 0, order: 1 },
   { id: 'easycard', name: '悠遊卡', emo: '🚌', type: 'easycard', tracked: true, initBalance: 0, order: 2 },
-  { id: 'richart', name: '台新Richart', emo: '💳', type: 'card', tracked: true, initBalance: 0, order: 3 },
-  { id: 'sinopac', name: '永豐卡', emo: '💳', type: 'card', tracked: true, initBalance: 0, order: 4 }
+  { id: 'richart', name: '台新Richart', emo: '💳', type: 'card', tracked: false, initBalance: 0, order: 3 },
+  { id: 'sinopac', name: '永豐卡', emo: '💳', type: 'card', tracked: false, initBalance: 0, order: 4 }
 ];
 
 export const ACCOUNT_TYPES = [
