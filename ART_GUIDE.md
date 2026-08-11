@@ -107,21 +107,22 @@ color palette: pink body #ED93B1, deep rose wings #D4537E, dark plum features #4
 | fat | round like a balloon, wearing tilted party hat, exhausted but happy grin, holding empty drink |
 | sad | grey-ish faded feathers, drooping head feather, sitting alone with a wilted balloon |
 
-## 🍜 飽飽（meishi）— 貪吃美食獸・美食家
+## 🍙 飽飽（meishi）— 擬人化飯糰・美食家
 
 ```
-a chubby round peach-orange foodie monster wearing a fluffy white chef's hat,
-big round sparkly eyes with white highlights, rosy cheeks, small pink tongue licking its lips,
-happy gourmet expression, soft plump body,
-color palette: warm peach-orange body #EC8A5C, white chef hat #FFFDF8, dark brown features #3A1A10, rosy pink cheeks and tongue #F0736F
+a cute anthropomorphic rice ball (onigiri) monster, rounded triangle white rice body,
+a band of dark seaweed nori across the bottom, one small red umeboshi plum on top,
+big round sparkly eyes with white highlights, rosy cheeks, tiny stubby arms and feet,
+happy foodie expression,
+color palette: white rice body #FFFDF5, dark seaweed nori #3B463D, red umeboshi #E36A5B, dark brown features #3A2A18, rosy cheeks #F4A0A0
 ```
 
 | 狀態 | 追加 prompt |
 |---|---|
-| idle | standing happily holding a tiny fork and spoon in stubby hands, content satisfied smile |
-| happy | eyes sparkling like stars, hugging a steaming bowl of ramen noodles, drooling with joy, little food sparkles floating around |
-| fat | extremely round and stuffed full, tiny napkin tucked at neck, sitting behind a pile of empty plates, blissful over-full belly |
-| sad | droopy hungry expression, empty plate and lonely fork, tummy visibly rumbling, chef hat slightly deflated |
+| idle | standing happily with tiny arms at sides, content satisfied smile |
+| happy | eyes sparkling like stars, holding tiny chopsticks, hopping with joy, little food sparkles and steam around |
+| fat | extremely round and overstuffed rice ball, cheeks puffed full, tiny napkin, sitting among empty plates, blissful over-full look |
+| sad | droopy hungry expression, nori peeling off at a corner, empty bowl beside, tummy rumbling, lonely |
 
 ---
 
